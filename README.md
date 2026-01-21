@@ -1,9 +1,22 @@
-# high-order-anesthesia
 
-install requirements.txt
+## Setup
+Clone this repository:
+```bash
+git clone https://github.com/camilo-espinosa/high-order-anesthesia.git
+cd high-order-anesthesia
+```
+Install dependencies in requirements.txt
 
+```bash
+pip install -r requirements.txt
+```
+A version of PyTorch, with CUDA compatibility is also necessary to use GPU: [https://pytorch.org/get-started/locally/](https://pytorch.org/get-started/locally/).
 
-install torch according to https://pytorch.org/get-started/locally/
+```bash
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+```
 
-e.g.: pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu126
+## Usage examples (Notebooks):
 
+### Results 1: 
+[R1_A_nplet_from_pairs.ipynb](https://github.com/camilo-espinosa/volcano-seismic-segmentation/blob/main/notebooks/R1_A_nplet_from_pairs.ipynb)
