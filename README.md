@@ -19,4 +19,4 @@ pip install torch torchvision torchaudio --index-url https://download.pytorch.or
 ## Usage examples (Notebooks):
 
 ### Results 1: 
-[R1_A_nplet_from_pairs.ipynb](https://github.com/camilo-espinosa/volcano-seismic-segmentation/blob/main/notebooks/R1_A_nplet_from_pairs.ipynb)
+[R1_A_nplet_from_pairs.ipynb](https://github.com/camilo-espinosa/high-order-anesthesia/blob/main/notebooks/R1_A_nplet_from_pairs.ipynb)
