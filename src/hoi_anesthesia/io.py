@@ -1,5 +1,7 @@
 from collections import defaultdict
 import h5py
+import pickle
+import gzip
 
 
 def load_covariance_dict(filepath, lazy=False):
@@ -40,3 +42,8 @@ def print_time(t_i, t_f):
     minutes = int((elapsed_time_seconds % 3600) // 60)
     seconds = int(elapsed_time_seconds % 60)
     print("Elapsed time: {:02d}:{:02d}:{:02d}".format(hours, minutes, seconds))
+
+
+def save_results(results, path="nplet_tails.pkl.gz"):
+    with gzip.open(path, "wb") as f:
+        pickle.dump(results, f, protocol=pickle.HIGHEST_PROTOCOL)

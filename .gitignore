@@ -1,7 +1,6 @@
 results/covariance_matrices_gc.h5
 data/covariance_matrices_gc.h5
 .gitignore
-.gitignore
 data/dummy_covmant.h5
 src/hoi_anesthesia/__pycache__/preprocessing.cpython-310.pyc
 src/hoi_anesthesia/__pycache__
@@ -13,3 +12,5 @@ results/R1_A_max_O_diff_MA_4.csv
 results/R1_A_max_O_diff_DBS_all_orders.csv
 results/R1_A_max_O_diff_MA_5.csv
 results/R1_A_max_O_diff_MA_all_orders.csv
+results/R1_B_nplet_eval_DBS.csv
+results/R1_B_nplet_eval_MA.csv
