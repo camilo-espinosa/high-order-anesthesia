@@ -18,5 +18,8 @@ pip install torch torchvision torchaudio --index-url https://download.pytorch.or
 
 ## Usage examples (Notebooks):
 
-### Results 1: 
-[R1_A_nplet_from_pairs.ipynb](https://github.com/camilo-espinosa/high-order-anesthesia/blob/main/notebooks/R1_A_nplet_from_pairs.ipynb)
+### Result 1A - Find optimal nplets for C/NR scan pairs: 
+[R1_A_nplet_from_pairs.ipynb](https://github.com/camilo-espinosa/high-order-anesthesia/blob/main/notebooks/R1/R1_A_nplet_from_pairs.ipynb)
+
+### Result 1B - Evaluate discovered nplets on the datasets: 
+[R1_B_nplet_evaluation.ipynb](https://github.com/camilo-espinosa/high-order-anesthesia/blob/main/notebooks/R1/R1_B_nplet_evaluation.ipynb)
