@@ -436,3 +436,159 @@ def analyze_order(
 
     top_c, top_nr = keeper.get_results()
     return top_c, top_nr
+
+
+@torch.no_grad()
+def attach_delta_O_to_tail(
+    X_tensor: torch.Tensor,
+    n_c: int,
+    tail: List[Tuple[float, Tuple[int, ...]]],
+    k: int,
+    device: torch.device,
+    batch_size: int = 2048,
+) -> List[Tuple[float, float, Tuple[int, ...]]]:
+    """
+    Given a tail of (PR_AUC, nplet) and subject covariances X_tensor,
+    compute O for those n-plets, then ΔO = mean(O_C) - mean(O_NR),
+    and return (PR_AUC, ΔO, nplet) for each entry, in the same order.
+    """
+    if len(tail) == 0:
+        return []
+
+    # Unpack
+    pr_scores, nplets = zip(
+        *tail
+    )  # pr_scores: tuple[float], nplets: tuple[tuple[int,...]]
+    pr_scores = np.array(pr_scores, dtype=float)
+    nplets_arr = torch.tensor(nplets, dtype=torch.long)  # (B, k)
+
+    X_tensor = X_tensor.to(device=device, dtype=torch.float64)
+
+    B = nplets_arr.shape[0]
+    delta_O_all = np.empty(B, dtype=float)
+
+    for start in tqdm(
+        range(0, B, batch_size),
+        desc=f"Computing ΔO for tail (k={k}, B={B})",
+    ):
+        end = min(start + batch_size, B)
+        nplets_batch = nplets_arr[start:end].to(device=device)
+
+        # Compute measures
+        measures = nplets_measures(
+            X=X_tensor,
+            covmat_precomputed=True,
+            nplets=nplets_batch,
+            device=device,
+            verbose=logging.WARNING,
+        )
+        # measures[..., 2] -> O-information
+        O_vals = (
+            measures[..., 2].detach().cpu().numpy()
+        )  # shape either (b, N) or (N, b)
+
+        # Ensure O_vals is (N_subjects, b)
+        if O_vals.shape[0] != X_tensor.shape[0]:
+            O_vals = O_vals.T  # now (N_subjects, b)
+
+        # Use your existing delta_O function
+        delta_O_batch, _ = delta_O(O_vals, n_c)  # (b,)
+        delta_O_all[start:end] = delta_O_batch
+
+    # Build new tail with ΔO attached
+    tail_with_delta = [
+        (float(pr_scores[i]), float(delta_O_all[i]), nplets[i]) for i in range(B)
+    ]
+    return tail_with_delta
+
+
+def build_X_for_dataset(dataset: str, all_covs):
+    if dataset == "MA":
+        conscious_states = {"MA": ["MA_awake"]}
+        nonresponsive_states = {
+            "MA": [
+                "deep_propofol",
+                "ketamine",
+                "moderate_propofol",
+                "ts_selv2",
+                "ts_selv4",
+            ],
+        }
+    elif dataset == "DBS":
+        conscious_states = {"DBS": ["DBS_awake", "ts_on_5V"]}
+        nonresponsive_states = {
+            "DBS": ["ts_off", "ts_on_3V_control", "ts_on_5V_control"],
+        }
+    else:
+        raise ValueError(f"Unknown dataset: {dataset}")
+
+    X_tensor, n_c, n_nr = generate_X(conscious_states, nonresponsive_states, all_covs)
+    return X_tensor, n_c
+
+
+def build_region_maps_for_tail(
+    tail_with_delta,
+    mode: str,
+    R: int = 82,
+    delta_eps: float = 0.0,
+):
+    """
+    tail_with_delta: list of (pr_auc, delta_O, nplet_tuple)
+    mode: "C_positive" -> keep ΔO >  delta_eps
+          "NR_positive" -> keep ΔO < -delta_eps (or < 0 if delta_eps == 0)
+
+    Returns:
+        region_counts       : (R,) integer count of how many n-plets include each region
+        region_counts_prop  : (R,) counts divided by total # of kept n-plets
+        region_counts_z     : (R,) z-scored counts across regions (for plotting)
+    """
+    if len(tail_with_delta) == 0:
+        return (
+            np.zeros(R, dtype=int),
+            np.zeros(R, dtype=float),
+            np.zeros(R, dtype=float),
+        )
+
+    # 1) Filter n-plets by ΔO sign according to mode
+    nplet_list = []
+
+    for pr_auc, delta_O_val, nplet in tail_with_delta:
+        if mode == "C_positive":
+            if delta_O_val > delta_eps:
+                nplet_list.append(nplet)
+        elif mode == "NR_positive":
+            if delta_O_val < -delta_eps if delta_eps > 0 else delta_O_val < 0.0:
+                nplet_list.append(nplet)
+        else:
+            raise ValueError(f"Unknown mode: {mode}")
+
+    N_tail_filtered = len(nplet_list)
+    print(f"      After ΔO filtering ({mode}): {N_tail_filtered} n-plets")
+
+    if N_tail_filtered == 0:
+        return (
+            np.zeros(R, dtype=int),
+            np.zeros(R, dtype=float),
+            np.zeros(R, dtype=float),
+        )
+
+    # 2) Compute region participation (raw counts)
+    region_counts = np.zeros(R, dtype=int)
+
+    for nplet in nplet_list:
+        for r in nplet:
+            region_counts[r] += 1
+
+    # 3) Counts as proportion of all kept n-plets
+    region_counts_prop = region_counts.astype(float) / float(N_tail_filtered)
+    region_counts_percent = (region_counts.astype(float) / float(N_tail_filtered)) * 100
+
+    # 4) z-score counts across regions (for plotting)
+    mu = region_counts.mean()
+    sigma = region_counts.std()
+    if sigma > 0:
+        region_counts_z = (region_counts - mu) / sigma
+    else:
+        region_counts_z = np.zeros_like(region_counts, dtype=float)
+
+    return region_counts, region_counts_prop, region_counts_z, region_counts_percent

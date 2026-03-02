@@ -14,3 +14,4 @@ results/R1_A_max_O_diff_MA_5.csv
 results/R1_A_max_O_diff_MA_all_orders.csv
 results/R1_B_nplet_eval_DBS.csv
 results/R1_B_nplet_eval_MA.csv
+results/nplet_tails_PRAUC_MA_3.pkl.gz
