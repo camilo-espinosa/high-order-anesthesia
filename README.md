@@ -32,20 +32,21 @@ Discrimination is quantified by PR-AUC in a leave-one-pair-out (LOPO) cross-vali
 ```
 high-order-anesthesia/
 ├── data/
-│   └── README.md               # Expected HDF5 format + Zenodo link
+│   ├── covariance_matrices_gc.h5   # Pre-computed matrices
+│   └── README.md                   # HDF5 format documentation
 ├── results/
-│   └── README.md               # Intermediate file inventory
-├── src/hoi_anesthesia/         # Shared Python utilities
-│   ├── io.py                   # load_covariance_dict, save_results
-│   ├── utils.py                # max_difference_pairs, evaluate_nplet_batched, …
-│   ├── thoi_utils.py           # simulated_annealing_parallel wrapper
+│   └── README.md                   # Intermediate file inventory
+├── src/hoi_anesthesia/             # Shared Python utilities
+│   ├── io.py                       # load_covariance_dict, save_results
+│   ├── utils.py                    # max_difference_pairs, evaluate_nplet_batched, …
+│   ├── thoi_utils.py               # simulated_annealing_parallel wrapper
 │   ├── preprocessing.py
 │   ├── stats.py
-│   └── plotting.py             # plot_cocomac_region_values (Plotly brain maps)
+│   └── plotting.py                 # plot_cocomac_region_values (Plotly brain maps)
 └── notebooks/
-    ├── 00_preprocessing.ipynb           # Covariance matrix computation
+    ├── 00_preprocessing.ipynb           # Covariance matrix computation (example)
     ├── R1_discrimination/
-    │   ├── R1_A_lopo.ipynb              # Stage 1: simulated annealing; Stage 2: LOPO PR-AUC  → Fig 1C
+    │   ├── R1_A_lopo.ipynb              # Stage 1: simulated annealing; Stage 2: LOPO PR-AUC  
     │   ├── R1_B_region_sampling.ipynb   # Region participation maps
     │   └── R1_C_fig2.ipynb              # Violin plots + brain maps                           → Fig 2
     ├── R2_order_effects/
@@ -99,13 +100,14 @@ See [https://pytorch.org/get-started/locally/](https://pytorch.org/get-started/l
 
 ## Data
 
-The covariance matrix file `data/covariance_matrices_gc.h5` is **not included** in this repository.
-It can be derived from the raw fMRI time series published with the original datasets:
+The covariance matrix file `data/covariance_matrices_gc.h5` is **included in this repository** (12 MB).
+
+These matrices were computed from raw fMRI time series published with the original datasets:
 
 - **MA dataset**: Uhrig et al. (2018) — [https://zenodo.org/records/10572216](https://zenodo.org/records/10572216) (`CoCoMac/timeseries.npy`)
-- **DBS dataset**: Tasserie et al. (2022)
+- **DBS dataset**: Tasserie et al. (2022) — contact corresponding authors
 
-The notebook `notebooks/00_preprocessing.ipynb` demonstrates how to compute per-scan covariance matrices from the raw time series and save them in the expected HDF5 format. See `data/README.md` for the full schema.
+The notebook `notebooks/00_preprocessing.ipynb` documents the full preprocessing pipeline for reproducibility. See `data/README.md` for the HDF5 schema.
 
 ---
 
@@ -128,26 +130,18 @@ Steps 3–5 and supplementary notebooks only load pre-computed results.
 
 ---
 
-## Key naming conventions
-
-| Code token | Paper notation | Meaning |
-|-----------|---------------|---------|
-| `c_gt_nr` | Ω_C > Ω_NR | Redundancy elevated in conscious scans |
-| `nr_gt_c` | Ω_NR > Ω_C | Redundancy elevated in non-responsive scans |
-| `PR_AUC` | PR-AUC | Precision-recall AUC (positive class = polarity's target) |
-| `PR_AUC_inv` | PR-AUC (inv) | PR-AUC with opposite class as positive |
-
----
-
 ## Citation
 
 If you use this code, please cite the associated paper (citation details will be updated upon publication) and the THOI library:
 
 ```bibtex
-@software{belloli2025thoi,
-  title  = {THOI: Torch Higher-Order Interactions},
-  author = {Belloli, L. and others},
-  year   = {2025},
-  url    = {https://github.com/FraLotito/thoi}
+@article{belloli2025thoi,
+  title={THOI: An efficient and accessible library for computing higher-order interactions enhanced by batch-processing},
+  author={Belloli, Laouen and Mediano, Pedro and Cofre, Rodrigo and Slezak, Diego Fernandez and Herzog, Ruben},
+  journal={PLoS One},
+  volume={21},
+  number={5},
+  pages={e0348005},
+  year={2026}
 }
 ```

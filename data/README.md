@@ -1,11 +1,14 @@
 # Data
 
-This directory stores the covariance matrix input file.
-**The HDF5 file is NOT included in the repository** due to size.
+## Covariance matrices
 
-## Expected file
+`covariance_matrices_gc.h5` -- **included in this repository** (12 MB)
 
-`covariance_matrices_gc.h5`
+This HDF5 file contains pre-computed Gaussian-copula covariance matrices derived from the raw time series published in:
+- **MA dataset** (Uhrig et al. 2018): https://zenodo.org/records/10572216 (file: `CoCoMac/timeseries.npy`)
+- **DBS dataset** (Tasserie et al. 2022): contact corresponding authors
+
+See `notebooks/00_preprocessing.ipynb` for the full preprocessing pipeline.
 
 HDF5 file with structure:
 

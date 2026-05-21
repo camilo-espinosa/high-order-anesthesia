@@ -534,8 +534,8 @@ def build_region_maps_for_tail(
 ):
     """
     tail_with_delta: list of (pr_auc, delta_O, nplet_tuple)
-    mode: "C_positive" -> keep ΔO >  delta_eps
-          "NR_positive" -> keep ΔO < -delta_eps (or < 0 if delta_eps == 0)
+    mode: "C_positive" or "c_gt_nr"  -> keep ΔO >  delta_eps
+          "NR_positive" or "nr_gt_c" -> keep ΔO < -delta_eps (or < 0 if delta_eps == 0)
 
     Returns:
         region_counts       : (R,) integer count of how many n-plets include each region
@@ -547,16 +547,17 @@ def build_region_maps_for_tail(
             np.zeros(R, dtype=int),
             np.zeros(R, dtype=float),
             np.zeros(R, dtype=float),
+            np.zeros(R, dtype=float),
         )
 
     # 1) Filter n-plets by ΔO sign according to mode
     nplet_list = []
 
     for pr_auc, delta_O_val, nplet in tail_with_delta:
-        if mode == "C_positive":
+        if mode in ("C_positive", "c_gt_nr"):
             if delta_O_val > delta_eps:
                 nplet_list.append(nplet)
-        elif mode == "NR_positive":
+        elif mode in ("NR_positive", "nr_gt_c"):
             if delta_O_val < -delta_eps if delta_eps > 0 else delta_O_val < 0.0:
                 nplet_list.append(nplet)
         else:
@@ -568,6 +569,7 @@ def build_region_maps_for_tail(
     if N_tail_filtered == 0:
         return (
             np.zeros(R, dtype=int),
+            np.zeros(R, dtype=float),
             np.zeros(R, dtype=float),
             np.zeros(R, dtype=float),
         )

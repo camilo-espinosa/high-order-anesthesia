@@ -3,24 +3,24 @@
 All notebooks should be run from the repository root (`high-order-anesthesia/`).
 Each notebook sets `sys.path` and `os.chdir` automatically.
 
-Run notebooks in the order below. Computationally intensive steps (marked ⚡) benefit from a CUDA GPU via the THOI library.
+Run notebooks in the order below. Computationally intensive steps benefit from a CUDA GPU via the THOI library.
 
 ---
 
-## 00 — Preprocessing
+## 00 — Preprocessing (optional)
 
 | Notebook | Description |
 |----------|-------------|
-| [`00_preprocessing.ipynb`](00_preprocessing.ipynb) | Compute per-scan Gaussian-copula covariance matrices from raw fMRI time series and save them to `data/covariance_matrices_gc.h5`. Includes a walkthrough on the dummy dataset bundled in `data/`. |
+| [`00_preprocessing.ipynb`](00_preprocessing.ipynb) | Documents how per-scan Gaussian-copula covariance matrices were computed from raw fMRI time series. **As example** — matrices used in the study are already included in `data/covariance_matrices_gc.h5`. Use this notebook only if you want to recompute from raw data. |
 
 ---
 
 ## R1 — Discrimination of conscious vs non-responsive states
 
-| Notebook | Description | Output |
+| Notebook |    Description    | Output |
 |----------|-------------|--------|
-| [`R1_discrimination/R1_A_lopo.ipynb`](R1_discrimination/R1_A_lopo.ipynb) ⚡ | **Stage 1** – Simulated annealing finds the *n*-plet (per dataset, order 3–9, polarity) that maximises ΔΩ across C/NR scan pairs. **Stage 2** – Leave-one-pair-out (LOPO) PR-AUC evaluation of discovered n-plets. | `results/R1_A_max_O_diff_{dataset}_{order}.csv`, `results/R1_A_max_O_diff_{dataset}_all_orders.csv`, `results/R1_B_nplet_eval_{dataset}.csv` |
-| [`R1_discrimination/R1_B_region_sampling.ipynb`](R1_discrimination/R1_B_region_sampling.ipynb) ⚡ | Sample millions of random n-plets, score each with PR-AUC, retain the top percentile, and aggregate into per-region participation maps (ΔΩ-weighted). | `results/R1_C_nplet_tails_PRAUC_with_deltaO_ALL.pkl.gz`, `results/R1_C_region_maps_PRAUC_deltaO.pkl.gz` |
+| [`R1_discrimination/R1_A_lopo.ipynb`](R1_discrimination/R1_A_lopo.ipynb) | **Stage 1** – Simulated annealing finds the *n*-plet (per dataset, order 3–9, polarity) that maximises ΔΩ across C/NR scan pairs. **Stage 2** – Leave-one-pair-out (LOPO) PR-AUC evaluation of discovered n-plets. | `results/R1_A_max_O_diff_{dataset}_{order}.csv`, `results/R1_A_max_O_diff_{dataset}_all_orders.csv`, `results/R1_B_nplet_eval_{dataset}.csv` |
+| [`R1_discrimination/R1_B_region_sampling.ipynb`](R1_discrimination/R1_B_region_sampling.ipynb) | Sample millions of random n-plets, score each with PR-AUC, retain the top percentile, and aggregate into per-region participation maps (ΔΩ-weighted). | `results/R1_C_nplet_tails_PRAUC_with_deltaO_ALL.pkl.gz`, `results/R1_C_region_maps_PRAUC_deltaO.pkl.gz` |
 | [`R1_discrimination/R1_C_fig2.ipynb`](R1_discrimination/R1_C_fig2.ipynb) | **Figure 2** – Violin plots of Ω per condition for the optimal n-plets (MWU + Bonferroni correction) and CoCoMac brain maps of regional participation. | Fig 2 |
 
 ---
@@ -52,11 +52,3 @@ Run notebooks in the order below. Computationally intensive steps (marked ⚡) b
 
 ---
 
-## Naming conventions
-
-| Code token | Meaning |
-|-----------|---------|
-| `c_gt_nr` | Ω_C > Ω_NR — redundancy elevated in conscious scans |
-| `nr_gt_c` | Ω_NR > Ω_C — redundancy elevated in non-responsive scans |
-| `PR_AUC` | Precision-recall AUC (polarity's target class as positive) |
-| `PR_AUC_inv` | PR-AUC with opposite class as positive |
