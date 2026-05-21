@@ -1,0 +1,17 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "High-order brain interactions distinguish awake states, general anesthesia, and recovery under deep brain stimulation"
+type: software
+repository-code: "https://github.com/camilo-espinosa/high-order-anesthesia"
+license: MIT
+abstract: >
+  Code accompanying the paper: Higher-order O-information signatures of consciousness
+  in non-human primate fMRI under diverse anaesthetic agents and deep brain stimulation.
+keywords:
+  - consciousness
+  - anesthesia
+  - higher-order interactions
+  - O-information
+  - fMRI
+  - deep brain stimulation
+  - information theory
