@@ -1,30 +1,22 @@
 # Visualization assets
 
-The surface mesh files required for brain map rendering are **not included** in
-this repository due to unclear redistribution licensing.
+Surface mesh files for brain map rendering are included in this directory.
 
-## Required files
-
-Place the following files in this directory (`data/visualization/`):
+## Files
 
 | File | Description |
 |------|-------------|
-| `f99_surface_147k.gii` | F99 macaque cortical surface mesh (~4.7 MB) |
-| `f99_regionMapping_147k_84.gii` | CoCoMac region label mapping for 147k vertices (~0.2 MB) |
+| `f99_surface_147k.gii` | F99 macaque cortical surface mesh (147k vertices) |
+| `f99_regionMapping_147k_84.gii` | CoCoMac 82-region label mapping for 147k vertices |
 
-## Where to obtain them
+## Attribution
 
-These files originate from the **F99 macaque atlas** and the **CoCoMac parcellation**,
-distributed as part of [The Virtual Brain (TVB)](https://www.thevirtualbrain.org) dataset.
+These files are derived from **The Virtual Macaque Brain** dataset:
 
-1. Download the TVB demo datasets from:  
-   https://zenodo.org/record/10'
+> Shen, K., Bezgin, G., Everling, S., & McIntosh, A. R. (2022).  
+> *The Virtual Macaque Brain: A macaque connectome for large-scale network simulations in TheVirtualBrain.*  
+> Zenodo. https://doi.org/10.5281/zenodo.7011292
 
-2. Look for `Macaque_47` or `Macaque_80` connectivity datasets which include
-   the f99 surface and region mapping files.
-
-Alternatively, they may be obtained from the
-[Connectome Workbench](https://www.humanconnectome.org/software/connectome-workbench)
-macaque atlases or the original Caret distribution.
-
-> **Note**: Check the applicable license before redistributing these files.
+The GIFTI-format files were produced by the
+[TVB team](https://gitlab.ebrains.eu/ri/tech-hub/apps/tvb/tvb-data/-/tree/master/tvb_data/macaque_v3)
+from the original surface and region-mapping text files released at the above Zenodo record.
