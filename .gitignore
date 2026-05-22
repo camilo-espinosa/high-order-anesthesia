@@ -50,3 +50,8 @@ results/R1_B_nplet_tails_PRAUC_with_deltaO_ALL.pkl.gz
 results/R1_B_region_maps_PRAUC_deltaO.pkl.gz
 results/fig2_brain_*.html
 results/fig2_brain_*.png
+results/fig3_boxplots_N1.pdf
+results/fig3_PRAUC_lines_N1.pdf
+results/fig4_cross_dataset_violins.pdf
+results/figS4b_combined_dataset_violins.pdf
+results/R1_B_region_maps_PRAUC_deltaO_all_orders.pkl.gz

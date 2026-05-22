@@ -148,6 +148,231 @@ def sci_label(x):
     return f"{x:.1f}"
 
 
+cocomac_table = {
+    1: ("TCpol", "R"),
+    2: ("TCs", "R"),
+    3: ("Amyg", "R"),
+    4: ("PFCoi", "R"),
+    5: ("Ia", "R"),
+    6: ("PFCom", "R"),
+    7: ("TCc", "R"),
+    8: ("PFCol", "R"),
+    9: ("TCi", "R"),
+    10: ("PHC", "R"),
+    11: ("G", "R"),
+    12: ("PMCvl", "R"),
+    13: ("VACv", "R"),
+    14: ("Ip", "R"),
+    15: ("PFCpol", "R"),
+    16: ("HC", "R"),
+    17: ("CCs", "R"),
+    18: ("PFCvl", "R"),
+    19: ("V2", "R"),
+    20: ("PFCm", "R"),
+    21: ("TCv", "R"),
+    22: ("VACd", "R"),
+    23: ("V1", "R"),
+    24: ("PFCcl", "R"),
+    25: ("A2", "R"),
+    26: ("CCr", "R"),
+    27: ("CCp", "R"),
+    28: ("CCa", "R"),
+    29: ("S2", "R"),
+    30: ("S1", "R"),
+    31: ("A1", "R"),
+    32: ("M1", "R"),
+    33: ("PCi", "R"),
+    34: ("PCm", "R"),
+    35: ("PFCdm", "R"),
+    36: ("PCip", "R"),
+    37: ("PCs", "R"),
+    38: ("FEF", "R"),
+    39: ("PFCdl", "R"),
+    40: ("PMCm", "R"),
+    41: ("PMCdl", "R"),
+    42: ("TCpol", "L"),
+    43: ("TCs", "L"),
+    44: ("Amyg", "L"),
+    45: ("PFCoi", "L"),
+    46: ("Ia", "L"),
+    47: ("PFCom", "L"),
+    48: ("TCc", "L"),
+    49: ("PFCol", "L"),
+    50: ("TCi", "L"),
+    51: ("PHC", "L"),
+    52: ("G", "L"),
+    53: ("PMCvl", "L"),
+    54: ("VACv", "L"),
+    55: ("Ip", "L"),
+    56: ("PFCpol", "L"),
+    57: ("HC", "L"),
+    58: ("CCs", "L"),
+    59: ("PFCvl", "L"),
+    60: ("V2", "L"),
+    61: ("PFCm", "L"),
+    62: ("TCv", "L"),
+    63: ("VACd", "L"),
+    64: ("V1", "L"),
+    65: ("PFCcl", "L"),
+    66: ("A2", "L"),
+    67: ("CCr", "L"),
+    68: ("CCp", "L"),
+    69: ("CCa", "L"),
+    70: ("S2", "L"),
+    71: ("S1", "L"),
+    72: ("A1", "L"),
+    73: ("M1", "L"),
+    74: ("PCi", "L"),
+    75: ("PCm", "L"),
+    76: ("PFCdm", "L"),
+    77: ("PCip", "L"),
+    78: ("PCs", "L"),
+    79: ("FEF", "L"),
+    80: ("PFCdl", "L"),
+    81: ("PMCm", "L"),
+    82: ("PMCdl", "L"),
+}
+
+
+def plot_cocomac_regions(
+    regions,
+    colors,
+    names=None,
+    cocomac_names=False,
+    file_path="data/visualization/",
+    show=True,
+    distance=1,
+):
+    """
+    Plot selected CoCoMac regions on the macaque cortical surface using per-vertex RGB colors.
+
+    Parameters
+    ----------
+    regions : list[int] (0-based)
+    colors  : list[str] (hex colors, one per region)
+    names   : list[str] or None
+        Legend labels. Empty list + cocomac_names=True → use CoCoMac abbreviations.
+        Empty list + cocomac_names=False → no legend.
+    cocomac_names : bool
+    """
+    if names is None:
+        names = []
+    if len(names) not in (0, len(regions)):
+        raise ValueError("names must be empty or the same length as regions")
+
+    regions_1b = (np.array(regions) + 1).tolist()
+
+    if len(names) == 0:
+        final_names = (
+            [f"{cocomac_table[rid][0]} ({cocomac_table[rid][1]})" for rid in regions_1b]
+            if cocomac_names
+            else None
+        )
+    else:
+        final_names = list(names)
+
+    surf_file = file_path + "f99_surface_147k.gii"
+    label_file = file_path + "f99_regionMapping_147k_84.gii"
+
+    coords, faces = surface.load_surf_mesh(surf_file)
+    region_map = nib.load(label_file).darrays[0].data.astype(int)
+
+    def _hex_to_rgb255(c):
+        return (np.array(mcolors.to_rgb(c)) * 255).astype(np.uint8)
+
+    region_color_rgb = {
+        rid: _hex_to_rgb255(col) for rid, col in zip(regions_1b, colors)
+    }
+
+    n_vertices = coords.shape[0]
+    vec2coco = np.concatenate([np.arange(0, 41), np.arange(42, 83)])
+    bg = np.array([245, 245, 220], dtype=np.uint8)
+    vertex_rgb = np.tile(bg, (region_map.shape[0], 1)).astype(np.uint8)
+
+    for idx, coco_val in enumerate(vec2coco):
+        rid = idx + 1
+        if rid in region_color_rgb:
+            vertex_rgb[region_map == coco_val] = region_color_rgb[rid]
+
+    coords_L = coords[: n_vertices // 2]
+    faces_L = faces[np.all(faces < n_vertices // 2, axis=1)]
+    rgb_L = vertex_rgb[: n_vertices // 2]
+
+    coords_R = coords[n_vertices // 2 :]
+    faces_R = faces[np.all(faces >= n_vertices // 2, axis=1)] - n_vertices // 2
+    rgb_R = vertex_rgb[n_vertices // 2 :]
+
+    views = {
+        "lateral_L": dict(eye=dict(x=-3.0 * distance, y=0, z=0)),
+        "medial_L": dict(eye=dict(x=2.6 * distance, y=0, z=0)),
+        "medial_R": dict(eye=dict(x=-2.6 * distance, y=0, z=0)),
+        "lateral_R": dict(eye=dict(x=3.0 * distance, y=0, z=0)),
+        "top": dict(eye=dict(x=0, y=0, z=2.2 * distance), up=dict(x=0, y=1, z=0)),
+        "bottom": dict(eye=dict(x=0, y=0, z=-2.2 * distance), up=dict(x=0, y=1, z=0)),
+    }
+
+    fig = make_subplots(
+        rows=2,
+        cols=3,
+        specs=[[{"type": "surface"}] * 3, [{"type": "surface"}] * 3],
+        horizontal_spacing=0.02,
+        vertical_spacing=0.01,
+    )
+
+    def _add(row, col, crd, fcs, rgb, cam):
+        fig.add_trace(
+            go.Mesh3d(
+                x=crd[:, 0],
+                y=crd[:, 1],
+                z=crd[:, 2],
+                i=fcs[:, 0],
+                j=fcs[:, 1],
+                k=fcs[:, 2],
+                vertexcolor=[f"rgb({r},{g},{b})" for r, g, b in rgb],
+                showscale=False,
+                lighting=dict(ambient=0.8, diffuse=0.6, roughness=0.9),
+            ),
+            row=row,
+            col=col,
+        )
+        fig.update_scenes(
+            dict(
+                xaxis=dict(visible=False),
+                yaxis=dict(visible=False),
+                zaxis=dict(visible=False),
+                camera=cam,
+                aspectmode="data",
+            ),
+            row=row,
+            col=col,
+        )
+
+    _add(1, 1, coords_R, faces_R, rgb_R, views["medial_R"])
+    _add(1, 3, coords_L, faces_L, rgb_L, views["medial_L"])
+    _add(2, 3, coords_L, faces_L, rgb_L, views["lateral_L"])
+    _add(2, 1, coords_R, faces_R, rgb_R, views["lateral_R"])
+    _add(1, 2, coords, faces, vertex_rgb, views["top"])
+    _add(2, 2, coords, faces, vertex_rgb, views["bottom"])
+
+    if final_names is not None:
+        for name, col in zip(final_names, colors):
+            fig.add_trace(
+                go.Scatter3d(
+                    x=[None],
+                    y=[None],
+                    z=[None],
+                    mode="markers",
+                    marker=dict(size=16, color=col),
+                    name=name,
+                )
+            )
+
+    fig.update_layout(height=800, width=1000)
+    if show:
+        fig.show()
+    return fig
+
+
 def plot_cocomac_region_values(
     values,
     file_path="data/visualization/",
