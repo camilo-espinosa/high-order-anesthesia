@@ -16,7 +16,6 @@ results/R1_B_nplet_eval_MA.csv
 results/nplet_tails_PRAUC_MA_3.pkl.gz
 data/example_covariance_matrices_gc.h5
 data/timeseries.npy
-data/visualization/*.gii
 results/fig2_violins_DBS.pdf
 results/fig2_violins_MA.pdf
 results/R1_A_max_O_diff_DBS_2.csv
