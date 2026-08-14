@@ -1,4 +1,3 @@
-results/covariance_matrices_gc.h5
 .gitignore
 data/dummy_covmant.h5
 src/hoi_anesthesia/__pycache__/preprocessing.cpython-310.pyc
@@ -14,7 +13,6 @@ results/R1_A_max_O_diff_MA_all_orders.csv
 results/R1_B_nplet_eval_DBS.csv
 results/R1_B_nplet_eval_MA.csv
 results/nplet_tails_PRAUC_MA_3.pkl.gz
-data/example_covariance_matrices_gc.h5
 data/timeseries.npy
 results/fig2_violins_DBS.pdf
 results/fig2_violins_MA.pdf
@@ -54,3 +52,5 @@ results/fig3_PRAUC_lines_N1.pdf
 results/fig4_cross_dataset_violins.pdf
 results/figS4b_combined_dataset_violins.pdf
 results/R1_B_region_maps_PRAUC_deltaO_all_orders.pkl.gz
+.vscode/settings.json
+data/example_covariance_matrices_gc.h5

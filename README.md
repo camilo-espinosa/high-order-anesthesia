@@ -3,7 +3,7 @@
 Code accompanying the paper:
 
 > **High-order brain interactions distinguish awake states, general anesthesia, and recovery under deep brain stimulation**  
-> *(manuscript in preparation)*
+> [manuscript](https://doi.org/10.64898/2026.06.01.728390)
 
 ---
 
