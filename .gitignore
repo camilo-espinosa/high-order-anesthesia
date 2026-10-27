@@ -54,3 +54,5 @@ results/figS4b_combined_dataset_violins.pdf
 results/R1_B_region_maps_PRAUC_deltaO_all_orders.pkl.gz
 .vscode/settings.json
 data/example_covariance_matrices_gc.h5
+MA_DEEP_ONLY_ASSESSMENT.md
+results/original_results.zip

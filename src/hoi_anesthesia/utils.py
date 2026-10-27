@@ -509,8 +509,6 @@ def build_X_for_dataset(dataset: str, all_covs):
             "MA": [
                 "deep_propofol",
                 "ketamine",
-                "moderate_propofol",
-                "ts_selv2",
                 "ts_selv4",
             ],
         }

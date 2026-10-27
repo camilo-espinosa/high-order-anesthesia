@@ -25,6 +25,12 @@ For each dataset and each *n*-plet size *n* ∈ {3, …, 9}, simulated annealing
 
 Discrimination is quantified by PR-AUC in a leave-one-pair-out (LOPO) cross-validation scheme.
 
+For MA, classification compares awake scans against deep propofol, ketamine, and
+deep sevoflurane (24 reference and 56 NR scans). Moderate propofol and moderate
+sevoflurane are retained in condition-wise plots but excluded from optimisation,
+scores, regional-map calculations, and primary statistical comparisons. DBS
+classification is unchanged; low CT remains descriptive only.
+
 ---
 
 ## Repository structure
