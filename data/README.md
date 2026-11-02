@@ -9,6 +9,20 @@ This HDF5 file contains pre-computed Gaussian-copula covariance matrices derived
 - **DBS dataset** (Tasserie et al. 2022): contact corresponding authors
 
 See `notebooks/00_preprocessing.ipynb` for the full preprocessing pipeline.
+The notebook regenerates the primary file from the cleaned MA/DBS MATLAB inputs used by the
+diagnostics, checking state counts and scan indices against `scan_metadata.csv`. It fits regional
+OLS global-signal regression to each full scan in both datasets, then retains the first 250 MA
+samples (~600 s) or every other DBS sample (250 points, ~625 s) before the Gaussian copula.
+The acquisition band-pass and MA-only notch are unchanged; no-GSR and added-DBS-notch
+sensitivities remain in `notebooks/diagnostics/01_B_omega_sensitivity.ipynb`.
+
+## Scan metadata
+
+`scan_metadata.csv` contains one row per scan represented in `covariance_matrices_gc.h5`, with
+dataset, state, zero-based scan index within that state, animal, session, and run. The MA mapping
+comes from `results/diagnostics/01_A_ma_scan_monkey_map.csv`; the DBS mapping comes from
+`metadata_DBS.ods`. Deleted DBS scans are excluded. The 5V-control cleaned index correction (19 to
+18) is reflected in the CSV.
 
 HDF5 file with structure:
 

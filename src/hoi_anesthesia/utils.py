@@ -13,6 +13,7 @@ from sklearn.metrics import average_precision_score
 from sklearn.feature_selection import f_classif
 from thoi.measures.gaussian_copula import nplets_measures
 import math
+from src.hoi_anesthesia.states import NONRESPONSIVE_STATES, RESPONSIVE_STATES
 
 
 def max_difference_pairs(batched_measures, measure="o"):
@@ -32,13 +33,13 @@ def max_difference_pairs(batched_measures, measure="o"):
 def evaluate_nplet_batched(
     idx,
     all_covs,
-    conscious_states,
+    responsive_states,
     nonresponsive_states,
     selected_dataset,
     optimal_nplet,
-    state_c,  # tuple-like (ds, st) for discovery in conscious set
+    state_r,  # tuple-like (ds, st) for discovery in responsive set
     state_nr,  # tuple-like (ds, st) for discovery in nonresponsive set
-    subject_c,  # index to skip in conscious discovery pair
+    subject_r,  # index to skip in responsive discovery pair
     subject_nr,  # index to skip in nonresponsive discovery pair
     device,
 ):
@@ -58,13 +59,13 @@ def evaluate_nplet_batched(
     measure_list = ["TC", "DTC", "O", "S", "norm_O", "FC_mean_z"]
 
     # --- Gather covariance matrices per condition (skip discovery subject)
-    covs_conscious = []
-    for st in conscious_states[selected_dataset]:
+    covs_responsive = []
+    for st in responsive_states[selected_dataset]:
         covs = all_covs[selected_dataset][st]  # (n_subj, N, N)
         for subj_idx in range(covs.shape[0]):
-            if st == state_c and subj_idx == subject_c:
+            if st == state_r and subj_idx == subject_r:
                 continue
-            covs_conscious.append(np.asarray(covs[subj_idx]))
+            covs_responsive.append(np.asarray(covs[subj_idx]))
 
     covs_nonresp = []
     for st in nonresponsive_states[selected_dataset]:
@@ -74,16 +75,16 @@ def evaluate_nplet_batched(
                 continue
             covs_nonresp.append(np.asarray(covs[subj_idx]))
 
-    n_c = len(covs_conscious)
+    n_r = len(covs_responsive)
     n_nr = len(covs_nonresp)
 
-    if n_c == 0 or n_nr == 0:
+    if n_r == 0 or n_nr == 0:
         raise ValueError(
             "Empty group after skipping discovery subject(s). Check inputs."
         )
 
-    # --- Single batched tensor over ALL subjects (conscious first, then nonresponsive)
-    X_list = covs_conscious + covs_nonresp  # list of (N,N)
+    # --- Single batched tensor over ALL subjects (responsive first, then nonresponsive)
+    X_list = covs_responsive + covs_nonresp  # list of (N,N)
     X_array = np.array(X_list)  # (D, N, N)
     # keep dtype from numpy; move to device for GPU if requested
     X_tensor = torch.as_tensor(X_array, device=device)
@@ -133,8 +134,8 @@ def evaluate_nplet_batched(
     # --- Stack all features: [TC, DTC, O, S, norm_O, FC_mean_z]
     vals = np.column_stack((vals_hoi, ratio, fc_mean_z))  # (D, 6)
 
-    # --- Labels: 1 for conscious, 0 for nonresponsive
-    y = np.concatenate([np.ones(n_c, dtype=int), np.zeros(n_nr, dtype=int)])  # (D,)
+    # --- Labels: 1 for responsive, 0 for nonresponsive
+    y = np.concatenate([np.ones(n_r, dtype=int), np.zeros(n_nr, dtype=int)])  # (D,)
 
     # --- ANOVA F-score across all columns
     F_vals, _ = f_classif(vals, y)  # shape (6,)
@@ -170,15 +171,15 @@ def evaluate_nplet_batched(
     return out_list
 
 
-def generate_X(conscious_states, nonresponsive_states, all_covs):
-    covs_conscious = []
-    covs_conscious_name = []
-    for ds, states in conscious_states.items():
+def generate_X(responsive_states, nonresponsive_states, all_covs):
+    covs_responsive = []
+    covs_responsive_name = []
+    for ds, states in responsive_states.items():
         for st in states:
             covs = all_covs[ds][st]
             for subj_idx in range(covs.shape[0]):
-                covs_conscious.append(np.asarray(covs[subj_idx]))
-                covs_conscious_name.append([ds, st, subj_idx])
+                covs_responsive.append(np.asarray(covs[subj_idx]))
+                covs_responsive_name.append([ds, st, subj_idx])
     covs_nonresp = []
     covs_nonresp_name = []
     for ds, states in nonresponsive_states.items():
@@ -188,9 +189,9 @@ def generate_X(conscious_states, nonresponsive_states, all_covs):
                 covs_nonresp.append(np.asarray(covs[subj_idx]))
                 covs_nonresp_name.append([ds, st, subj_idx])
 
-    n_c = len(covs_conscious)
+    n_c = len(covs_responsive)
     n_nr = len(covs_nonresp)
-    X_array = np.array(covs_conscious + covs_nonresp)
+    X_array = np.array(covs_responsive + covs_nonresp)
     X_tensor = torch.tensor(X_array)
     return X_tensor, n_c, n_nr
 
@@ -293,11 +294,11 @@ def compute_O_and_delta_batch(
     ----------
     X_tensor : torch.Tensor
         Covariance matrices for all subjects, shape (N_subjects, R, R).
-        The first n_c subjects are Conscious (C), the remaining are Non-Responsive (NR).
+        The first n_c subjects are Responsive (C), the remaining are Non-Responsive (NR).
     nplets_batch : torch.Tensor
         Batch of n-plets, shape (B, k), with indices in [0, R-1].
     n_c : int
-        Number of conscious subjects. NR subjects are from n_c to N_subjects-1.
+        Number of responsive subjects. NR subjects are from n_c to N_subjects-1.
     batch_size : int, optional
         Batch size argument passed to nplets_measures.
     device : torch.device, optional
@@ -503,25 +504,15 @@ def attach_delta_O_to_tail(
 
 
 def build_X_for_dataset(dataset: str, all_covs):
-    if dataset == "MA":
-        conscious_states = {"MA": ["MA_awake"]}
-        nonresponsive_states = {
-            "MA": [
-                "deep_propofol",
-                "ketamine",
-                "ts_selv4",
-            ],
-        }
-    elif dataset == "DBS":
-        conscious_states = {"DBS": ["DBS_awake", "ts_on_5V"]}
-        nonresponsive_states = {
-            "DBS": ["ts_off", "ts_on_3V_control", "ts_on_5V_control"],
-        }
-    else:
+    if dataset not in RESPONSIVE_STATES:
         raise ValueError(f"Unknown dataset: {dataset}")
 
-    X_tensor, n_c, n_nr = generate_X(conscious_states, nonresponsive_states, all_covs)
-    return X_tensor, n_c
+    responsive_states = {dataset: RESPONSIVE_STATES[dataset]}
+    nonresponsive_states = {dataset: NONRESPONSIVE_STATES[dataset]}
+    X_tensor, n_responsive, _ = generate_X(
+        responsive_states, nonresponsive_states, all_covs
+    )
+    return X_tensor, n_responsive
 
 
 def build_region_maps_for_tail(

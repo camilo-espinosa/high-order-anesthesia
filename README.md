@@ -9,7 +9,7 @@ Code accompanying the paper:
 
 ## Overview
 
-We apply multivariate information theory — specifically O-information (Ω) — to resting-state fMRI data from non-human primates to characterise how higher-order brain interactions reorganise across states of consciousness. Ω > 0 indicates redundancy-dominated dynamics; Ω < 0 indicates synergy-dominated dynamics.
+We apply multivariate information theory — specifically O-information (Ω) — to resting-state fMRI data from non-human primates to characterise how higher-order brain interactions reorganise across states of responsiveness. Ω > 0 indicates redundancy-dominated dynamics; Ω < 0 indicates synergy-dominated dynamics.
 
 Two complementary datasets are analysed:
 
@@ -18,7 +18,7 @@ Two complementary datasets are analysed:
 | **MA** (multi-anesthesia) | Wakefulness + propofol, sevoflurane, ketamine |
 | **DBS** (deep brain stimulation) | Wakefulness + propofol anesthesia + central-thalamus stimulation at two intensities |
 
-For each dataset and each *n*-plet size *n* ∈ {3, …, 9}, simulated annealing identifies regional subsets whose Ω best separates **conscious (C)** from **non-responsive (NR)** scans under two optimisation polarities:
+For each dataset and each *n*-plet size *n* ∈ {3, …, 9}, simulated annealing identifies regional subsets whose Ω best separates **responsive (C)** from **non-responsive (NR)** scans under two optimisation polarities:
 
 - **Ω_C > Ω_NR** — redundancy elevated in wakefulness
 - **Ω_NR > Ω_C** — synergy-to-redundancy transition in non-responsiveness

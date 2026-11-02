@@ -129,15 +129,9 @@ def nplets_measures(
 
     B = R * P
     nplets_batched = nplets_rpo.reshape(B, order)  # (B, order)
-    # Repeat pairs across R and flatten to match (B, D, N, N)
-    covmats_batched = (
-        covmats_pairs.unsqueeze(0).expand(R, -1, -1, -1, -1).reshape(B, D, N, N)
-    )
 
     # ---- precompute helpers for given order/S ----
     allmin1 = _all_min_1_ids(order, device=device)
-    # We'll construct bias correctors per (batch of RP) × S
-    bc1, bcN, bcNmin1 = _get_bias_correctors(T, order, batch_size, D, device)
 
     dataloader = DataLoader(
         nplets_batched, batch_size=min(batch_size, B), shuffle=False
@@ -148,23 +142,23 @@ def nplets_measures(
         dataloader, desc="Processing n-plets", leave=False, position=1
     ):
         bs = nplet_batch.shape[0]
-        cov_batch = covmats_batched[offset : offset + bs]  # (bs, D, N, N)
-        cov_batch.shape[:2]
+        pair_indices = torch.arange(offset, offset + bs, device=device).remainder(P)
+        cov_batch = covmats_pairs.index_select(0, pair_indices)
         # Create the covariance matrices for each nplet in the batch
         # |curr_batch_size| x |D| x |order| x |order|
         nplets_covmats = _generate_nplets_covmants_batched(cov_batch, nplet_batch)
-        nplets_covmats.shape
         # Pack covmats in a single batch
         # |curr_batch_size x D| x |order| x |order|
         nplets_covmats = nplets_covmats.view(bs * D, order, order)
 
+        bc1, bcN, bcNmin1 = _get_bias_correctors(T, order, bs, D, device)
         # Batch process all nplets at once
         m = _get_tc_dtc_from_batched_covmat(
             nplets_covmats,
             allmin1,
-            bc1[offset * D : (offset + bs) * D],
-            bcN[offset * D : (offset + bs) * D],
-            bcNmin1[offset * D : (offset + bs) * D],
+            bc1,
+            bcN,
+            bcNmin1,
         )
 
         # Unpack results
@@ -183,6 +177,7 @@ def nplets_measures(
                 dim=-1,
             )
         )
+        offset += bs
 
     # Concatenate all results
     return torch.cat(results, dim=0)
