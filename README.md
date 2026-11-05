@@ -18,12 +18,19 @@ Two complementary datasets are analysed:
 | **MA** (multi-anesthesia) | Wakefulness + propofol, sevoflurane, ketamine |
 | **DBS** (deep brain stimulation) | Wakefulness + propofol anesthesia + central-thalamus stimulation at two intensities |
 
-For each dataset and each *n*-plet size *n* ∈ {3, …, 9}, simulated annealing identifies regional subsets whose Ω best separates **responsive (C)** from **non-responsive (NR)** scans under two optimisation polarities:
+The primary revision analysis uses ordinary leave-one-animal-out (LOAO) validation. Within each
+training fold and *n*-plet size *n* ∈ {3, …, 9}, subsets maximise animal-balanced ROC-AUC for
+**responsive (C)** versus **non-responsive (NR)** scans under two optimisation polarities:
 
 - **Ω_C > Ω_NR** — redundancy elevated in wakefulness
 - **Ω_NR > Ω_C** — synergy-to-redundancy transition in non-responsiveness
 
-Discrimination is quantified by PR-AUC in a leave-one-pair-out (LOPO) cross-validation scheme.
+Orders 3-5 use exhaustive search; orders 6-9 use simulated annealing. Symmetric baselines optimise
+mean within-n-plet Fisher-z FC and fit full pairwise-vector models on both selected sets.
+Training-only logistic calibration allows held-out probabilities to be pooled for animal-balanced
+ROC-AUC and PR-AUC (weighted average precision). The archived LOPO pipeline and existing
+figures/results remain legacy outputs until explicitly regenerated; no new performance is claimed
+before the user runs the revision analysis.
 
 For MA, classification compares awake scans against deep propofol, ketamine, and
 deep sevoflurane (24 reference and 56 NR scans). Moderate propofol and moderate
@@ -46,13 +53,15 @@ high-order-anesthesia/
 │   ├── io.py                       # load_covariance_dict, save_results
 │   ├── utils.py                    # max_difference_pairs, evaluate_nplet_batched, …
 │   ├── thoi_utils.py               # simulated_annealing_parallel wrapper
+│   ├── validation.py               # Animal-balanced LOAO selection and baselines
 │   ├── preprocessing.py
 │   ├── stats.py
 │   └── plotting.py                 # plot_cocomac_region_values (Plotly brain maps)
 └── notebooks/
     ├── 00_preprocessing.ipynb           # Covariance matrix computation (example)
     ├── R1_discrimination/
-    │   ├── R1_A_lopo.ipynb              # Stage 1: simulated annealing; Stage 2: LOPO PR-AUC  
+    │   ├── R1_A_loao.ipynb              # Primary animal-held-out validation and FC baselines
+    │   ├── R1_D_synergy_loao.ipynb      # Synergy-constrained matched-region pairwise test
     │   ├── R1_B_region_sampling.ipynb   # Region participation maps
     │   └── R1_C_fig2.ipynb              # Violin plots + brain maps                           → Fig 2
     ├── R2_order_effects/
@@ -124,15 +133,21 @@ Run notebooks in order from the project root (`high-order-anesthesia/`). Each no
 | Step | Notebook | Output |
 |------|----------|--------|
 | 0 | `00_preprocessing.ipynb` | `data/covariance_matrices_gc.h5` |
-| 1 | `R1_A_lopo.ipynb` | `results/R1_A_max_O_diff_*.csv`, `results/R1_B_nplet_eval_*.csv` |
+| 1 | [`R1_A_loao.ipynb`](notebooks/R1_discrimination/R1_A_loao.ipynb) | `results/R1_A_loao/` out-of-fold predictions, selections, metrics, stability and model fits |
+| 1a | [`R1_D_synergy_loao.ipynb`](notebooks/R1_discrimination/R1_D_synergy_loao.ipynb) | `results/R1_D_synergy/` synergy-constrained selections and matched-region held-out model tables |
 | 2 | `R1_B_region_sampling.ipynb` | `results/R1_C_nplet_tails_*.pkl.gz`, `results/R1_C_region_maps_*.pkl.gz` |
 | 3 | `R1_C_fig2.ipynb` | Fig 2 (violin plots + brain maps) |
 | 4 | `R2_A_fig3.ipynb` | Fig 3 (order effects + PR-AUC lines) |
 | 5 | `R3_A_fig4.ipynb` | Fig 4 + Table 1 (cross-dataset) |
 | S1–S4 | `supplementary/` | Supplementary figures |
 
-Steps 0–2 are computationally intensive (GPU recommended for step 1).
+Steps 0–2 and 1a are computationally intensive (GPU recommended for steps 1 and 1a).
+Step 1a is a separate, optional R1 follow-up; criterion 3 defines near chance as both same-region pairwise models having animal-balanced accuracy at or below 0.55.
 Steps 3–5 and supplementary notebooks only load pre-computed results.
+They still consume legacy selections; they do not automatically consume the new LOAO outputs.
+Regenerate primary covariances with step 0, then assess the separate order-5 training-fold benchmark
+before running step 1. See the [LOAO workflow](notebooks/README.md#primary-loao-workflow) for fixed
+settings, output schemas and commands. Scripts, notebook cells and tests are run by the user.
 
 ---
 

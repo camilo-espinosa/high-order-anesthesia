@@ -370,6 +370,133 @@ def plot_cocomac_regions(
     fig.update_layout(height=800, width=1000)
     if show:
         fig.show()
+
+
+def plot_synergy_dissociation(animal_summary, animal):
+    """Plot held-out animal-balanced model accuracy and individual animal/class units."""
+    model_styles = {
+        "omega_direction": ("Omega, direction enforced", "#c43c39", "-"),
+        "mean_fc_same_regions": ("Mean FC, same regions", "#4c78a8", "-"),
+        "fc_vector_same_regions": ("FC vector, same regions", "#59a14f", "-"),
+        "fc_vector_plus_omega": ("FC vector + Omega", "#b279a2", "-"),
+        "best_pairwise_anywhere": ("Best pairwise anywhere", "#777777", "--"),
+    }
+    datasets = sorted(animal_summary["dataset"].dropna().unique())
+    fig, axes = plt.subplots(1, max(len(datasets), 1), figsize=(6 * max(len(datasets), 1), 4.5), squeeze=False)
+    for column, dataset in enumerate(datasets):
+        ax = axes[0, column]
+        dataset_summary = animal_summary.loc[animal_summary["dataset"] == dataset]
+        dataset_animal = animal.loc[animal["dataset"] == dataset]
+        for offset, (model, (label, color, linestyle)) in enumerate(model_styles.items()):
+            summary = dataset_summary.loc[dataset_summary["model"] == model].sort_values("order")
+            units = dataset_animal.loc[dataset_animal["model"] == model]
+            if summary.empty:
+                continue
+            ax.plot(
+                summary["order"], summary["balanced_accuracy"],
+                color=color, linestyle=linestyle, marker="o", label=label,
+            )
+            ax.scatter(
+                units["order"] + (offset - 2) * 0.025, units["accuracy"],
+                color=color, alpha=0.2, s=14,
+            )
+        ax.axhline(0.5, color="black", linestyle=":", linewidth=1)
+        ax.set(title=dataset, xlabel="N-plet order", ylabel="Held-out balanced accuracy")
+        ax.set_xticks(sorted(dataset_summary["order"].unique()))
+        ax.set_ylim(0, 1)
+    if datasets:
+        axes[0, 0].legend(frameon=False, fontsize=8)
+    fig.suptitle("Dissociation on held-out animals")
+    fig.tight_layout()
+    return fig
+
+
+def plot_synergy_pairwise_silence(predictions):
+    """Plot fold-centered held-out Omega and matched-region mean FC by class and animal."""
+    models = predictions.loc[predictions["model"] == "omega_direction"].copy()
+    datasets = sorted(models["dataset"].dropna().unique())
+    fig, axes = plt.subplots(
+        2, max(len(datasets), 1),
+        figsize=(5 * max(len(datasets), 1), 7),
+        squeeze=False,
+        sharex="col",
+    )
+    markers = {1: "o", 0: "s"}
+    for column, dataset in enumerate(datasets):
+        subset = models.loc[models["dataset"] == dataset].copy()
+        colors = plt.get_cmap("tab10")
+        animals = sorted(subset["animal"].astype(str).unique())
+        animal_colors = {
+            animal: colors(index % 10) for index, animal in enumerate(animals)
+        }
+        subset["centered_omega"] = subset["raw_omega"] - subset["training_median_NR"]
+        subset["centered_fc"] = subset["raw_fc_mean"] - subset["training_median_fc_NR"]
+        for responsive, marker in markers.items():
+            group = subset.loc[subset["responsive"] == responsive]
+            label = "Responsive" if responsive else "Non-responsive"
+            for animal in animals:
+                animal_rows = group.loc[group["animal"].astype(str) == animal]
+                if animal_rows.empty:
+                    continue
+                axes[0, column].scatter(
+                    animal_rows["order"], animal_rows["centered_omega"],
+                    color=animal_colors[animal], marker=marker, alpha=0.65, s=22,
+                    label=f"{animal} ({label})",
+                )
+                axes[1, column].scatter(
+                    animal_rows["order"], animal_rows["centered_fc"],
+                    color=animal_colors[animal], marker=marker, alpha=0.65, s=22,
+                )
+        axes[0, column].axhline(0, color="black", linestyle=":", linewidth=1)
+        axes[1, column].axhline(0, color="black", linestyle=":", linewidth=1)
+        axes[0, column].set_title(dataset)
+        axes[0, column].set_ylabel("Omega - training NR median")
+        axes[1, column].set_ylabel("Mean FC - training NR median")
+        axes[1, column].set_xlabel("N-plet order")
+        axes[1, column].set_xticks(sorted(subset["order"].unique()))
+    if datasets:
+        handles, labels = axes[0, 0].get_legend_handles_labels()
+        if handles:
+            fig.legend(handles, labels, loc="upper center", ncol=min(5, len(labels)), frameon=False, fontsize=8)
+    fig.suptitle("Held-out synergy and matched-region pairwise values")
+    fig.tight_layout(rect=(0, 0, 1, 0.9))
+    return fig
+
+
+def plot_synergy_animal_consistency(animal):
+    """Compare Omega and matched-region FC-vector accuracy per animal/class unit."""
+    keys = ["dataset", "order", "animal", "responsive"]
+    omega = animal.loc[animal["model"] == "omega_direction", keys + ["accuracy"]].rename(
+        columns={"accuracy": "omega_accuracy"},
+    )
+    pairwise = animal.loc[
+        animal["model"] == "fc_vector_same_regions", keys + ["accuracy"],
+    ].rename(columns={"accuracy": "fc_vector_accuracy"})
+    points = omega.merge(pairwise, on=keys, how="inner")
+    markers = {"MA": "o", "DBS": "^"}
+    colors = {1: "#4c78a8", 0: "#c43c39"}
+    fig, ax = plt.subplots(figsize=(6, 6))
+    for dataset, marker in markers.items():
+        subset = points.loc[points["dataset"] == dataset]
+        for responsive, color in colors.items():
+            group = subset.loc[subset["responsive"] == responsive]
+            if not group.empty:
+                ax.scatter(
+                    group["fc_vector_accuracy"], group["omega_accuracy"],
+                    marker=marker, color=color, alpha=0.65,
+                    label=f"{dataset} {'R' if responsive else 'NR'}",
+                )
+    ax.plot([0, 1], [0, 1], color="black", linestyle=":", linewidth=1)
+    ax.set(
+        xlabel="FC-vector animal/class accuracy",
+        ylabel="Omega animal/class accuracy",
+        title="Consistency across held-out animals",
+        xlim=(0, 1),
+        ylim=(0, 1),
+    )
+    ax.legend(frameon=False)
+    fig.tight_layout()
+    return fig
     return fig
 
 

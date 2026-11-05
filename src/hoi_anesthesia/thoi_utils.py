@@ -234,20 +234,47 @@ def simulated_annealing_parallel(
     metric: Union[str, Callable] = "o",  # tc, dtc, o, s
     largest: bool = False,
     verbose: int = logging.INFO,
+    candidate_score: Optional[Callable[[torch.Tensor], torch.Tensor]] = None,
+    progress_label: Optional[str] = None,
 ):
 
     logging.basicConfig(
         level=verbose, format="%(asctime)s - %(levelname)s - %(message)s"
     )
-    D = X.shape[0]  # number of datasets
-    covmats = torch.empty_like(X)
-    for d in range(D):
-        covmats[d, :, :, :], S, N, T = _normalize_input_data(
-            X[d, :, :, :],
-            covmat_precomputed,
-            T,
-            device,
-        )  # now S is number of subsets
+    if candidate_score is None:
+        D = X.shape[0]  # number of datasets
+        covmats = torch.empty_like(X)
+        for d in range(D):
+            covmats[d, :, :, :], S, N, T = _normalize_input_data(
+                X[d, :, :, :],
+                covmat_precomputed,
+                T,
+                device,
+            )  # now S is number of subsets
+
+        def evaluate(solutions):
+            return _evaluate_nplets(
+                covmats, T, solutions, metric, batch_size=batch_size, device=device,
+            ).reshape(repeat, D)
+    else:
+        if X.ndim != 3 or X.shape[-1] != X.shape[-2]:
+            raise ValueError("Candidate scoring requires X with shape (scans, regions, regions).")
+        D, N = 1, X.shape[-1]
+        if order is None or not 1 <= order < N:
+            raise ValueError("Candidate scoring requires 1 <= order < regions.")
+        if repeat < 1 or batch_size < 1 or max_iterations < 1 or early_stop < 1:
+            raise ValueError("Search counts must be positive.")
+        if initial_temp <= 0 or not 0 < cooling_rate <= 1:
+            raise ValueError("Temperature must be positive and cooling must be in (0, 1].")
+
+        def evaluate(solutions):
+            candidates = solutions.reshape(-1, order).sort(dim=-1).values
+            values = torch.cat([
+                candidate_score(batch) for batch in candidates.split(batch_size)
+            ])
+            if values.shape != (len(candidates),) or not torch.isfinite(values).all():
+                raise ValueError("Candidate callback must return one finite score per n-plet.")
+            return values.reshape(repeat, D)
 
     # Compute current solution
     # |batch_size| x |order|
@@ -259,15 +286,7 @@ def simulated_annealing_parallel(
     # |batch_size|
     # Loop over covmats in pairs
 
-    current_energy = _evaluate_nplets(
-        covmats,
-        T,  # we evaluate all items
-        current_solution,  # every subset must evaluate its corresponding nplet
-        metric,
-        batch_size=batch_size,
-        device=device,
-    )
-    current_energy = current_energy.reshape(repeat, D)
+    current_energy = evaluate(current_solution)
     if not largest:
         current_energy = -current_energy
 
@@ -302,8 +321,9 @@ def simulated_annealing_parallel(
 
         # Get function name if metric is a function
         if not isinstance(pbar, range):  # only if tqdm
+            description = progress_label or f"mean({metric_name})"
             pbar.set_description(
-                f"mean({metric_name}) = {(1 if largest else -1) * best_energy.mean()} - ES: {no_progress_count}"
+                f"{description} = {(1 if largest else -1) * best_energy.mean()} - ES: {no_progress_count}"
             )
 
         # Generate new solution by modifying the current solution.
@@ -326,15 +346,7 @@ def simulated_annealing_parallel(
 
         # Calculate energy of new solution
         # |batch_size|
-        new_energy = _evaluate_nplets(
-            covmats,
-            T,  # we evaluate all items
-            current_solution,  # every subset must evaluate its corresponding nplet
-            metric,
-            batch_size=batch_size,
-            device=device,
-        )
-        new_energy = new_energy.reshape(repeat, D)
+        new_energy = evaluate(current_solution)
         if not largest:
             new_energy = -new_energy
 
@@ -346,7 +358,7 @@ def simulated_annealing_parallel(
         # Determine if we should accept the new solution
         # |batch_size|
         temp_probas = torch.rand((repeat, D), device=device) < torch.exp(
-            delta_energy / temp
+            delta_energy / max(temp, torch.finfo(current_energy.dtype).tiny)
         )
 
         improves = delta_energy > 0
@@ -376,12 +388,24 @@ def simulated_annealing_parallel(
         current_energy[accept_new_solution] = new_energy[accept_new_solution]
 
         new_global_maxima = new_energy > best_energy
+        replace_best = new_global_maxima
+        if candidate_score is not None:
+            current_sorted = current_solution.sort(dim=-1).values
+            best_sorted = best_solution.sort(dim=-1).values
+            different = current_sorted != best_sorted
+            first = different.to(torch.int64).argmax(dim=-1, keepdim=True)
+            lex_smaller = (
+                current_sorted.gather(-1, first) < best_sorted.gather(-1, first)
+            ).squeeze(-1)
+            replace_best = new_global_maxima | (
+                (new_energy == best_energy) & lex_smaller & accept_new_solution
+            )
 
         # |batch_size| x |order|
-        best_solution[new_global_maxima] = current_solution[new_global_maxima]
+        best_solution[replace_best] = current_solution[replace_best]
 
         # |batch_size|
-        best_energy[new_global_maxima] = new_energy[new_global_maxima]
+        best_energy[replace_best] = new_energy[replace_best]
 
         # Cool down
         temp *= cooling_rate

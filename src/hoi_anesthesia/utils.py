@@ -16,6 +16,22 @@ import math
 from src.hoi_anesthesia.states import NONRESPONSIVE_STATES, RESPONSIVE_STATES
 
 
+def pairwise_fisher_z(covariances: torch.Tensor, nplets: torch.Tensor) -> torch.Tensor:
+    """Return (n-plets, scans, edges), in upper-triangle region order."""
+    if covariances.ndim != 3 or covariances.shape[-1] != covariances.shape[-2]:
+        raise ValueError("Covariances must have shape (scans, regions, regions).")
+    if nplets.ndim != 2 or nplets.shape[1] < 2:
+        raise ValueError("N-plets must have shape (candidates, order >= 2).")
+    sub = covariances[:, nplets[:, :, None], nplets[:, None, :]].permute(1, 0, 2, 3)
+    variance = sub.diagonal(dim1=-2, dim2=-1)
+    if not torch.isfinite(sub).all() or torch.any(variance <= 0):
+        raise ValueError("FC requires finite covariances with positive variances.")
+    std = variance.sqrt()
+    correlations = sub / (std.unsqueeze(-1) * std.unsqueeze(-2))
+    edges = torch.triu_indices(nplets.shape[1], nplets.shape[1], 1, device=sub.device)
+    return correlations[..., edges[0], edges[1]].clamp(-0.999999, 0.999999).atanh()
+
+
 def max_difference_pairs(batched_measures, measure="o"):
     """
     batched_measures: (batch, D, 4), with D = 2*N_pairs
@@ -106,27 +122,8 @@ def evaluate_nplet_batched(
 
     # --- Classical FC:  (batched, on device)
     with torch.no_grad():
-        idx_t = torch.as_tensor(optimal_nplet, dtype=torch.long, device=device)
-        # Sub-covariance for n-plet: (D, k, k)
-        cov_sub = X_tensor.index_select(1, idx_t).index_select(2, idx_t)
-
-        # Convert covariance to correlation
-        # var: (D, k)
-        var = torch.diagonal(cov_sub, dim1=-2, dim2=-1)
-        eps = 1e-12
-        std = torch.sqrt(torch.clamp(var, min=eps))  # (D, k)
-        denom = std.unsqueeze(-1) * std.unsqueeze(-2)  # (D, k, k)
-        corr = cov_sub / torch.clamp(denom, min=eps)
-
-        # numerical safety for Fisher z
-        corr = torch.clamp(corr, -0.999999, 0.999999)
-
-        k = idx_t.numel()
-        # upper triangle mask, excluding diagonal
-        triu_mask = torch.triu(torch.ones(k, k, dtype=bool, device=device), diagonal=1)
-        # (D, K) where K = k(k-1)/2
-        corr_pairs = corr[:, triu_mask]
-        z_pairs = torch.atanh(corr_pairs)
+        idx_t = torch.as_tensor([optimal_nplet], dtype=torch.long, device=device)
+        z_pairs = pairwise_fisher_z(X_tensor, idx_t)[0]
         fc_mean_z_tensor = z_pairs.mean(dim=-1)  # (D,)
 
     fc_mean_z = fc_mean_z_tensor.detach().cpu().numpy()  # (D,)

@@ -38,16 +38,19 @@ class PrimaryPreprocessingTests(unittest.TestCase):
             exec(compile(self.source, "00_preprocessing.ipynb", "exec"), namespace)
         return namespace["all_states"]
 
-    def test_full_scan_regional_gsr_precedes_exact_250_point_matching(self):
+    def test_full_scan_regional_gsr_applies_only_to_dbs_before_matching(self):
         actual = self.run_preprocessing()
         for dataset, states in self.states.items():
             for state, scans in states.items():
                 self.assertEqual(actual[dataset][state].shape, (2, 250, 82))
                 for index, scan in enumerate(scans):
-                    z = (scan - scan.mean(axis=0)) / scan.std(axis=0)
-                    design = np.column_stack([np.ones(500), z.mean(axis=1)])
-                    residual = scan - design @ np.linalg.lstsq(design, scan, rcond=None)[0]
-                    expected = residual[:250] if dataset == "MA" else residual[::2]
+                    if dataset == "DBS":
+                        z = (scan - scan.mean(axis=0)) / scan.std(axis=0)
+                        design = np.column_stack([np.ones(500), z.mean(axis=1)])
+                        residual = scan - design @ np.linalg.lstsq(design, scan, rcond=None)[0]
+                        expected = residual[::2]
+                    else:
+                        expected = scan[:250]
                     np.testing.assert_allclose(actual[dataset][state][index], expected, atol=1e-12)
         self.writer.assert_called_once_with(actual, "data")
 

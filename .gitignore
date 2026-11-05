@@ -59,3 +59,6 @@ results/original_results.zip
 results/*
 REVISION_PLAN.md
 data/metadata_DBS.ods
+data/data_DBS.mat
+R1_D_SYNERGY_PLAN.md
+data/data_MA.mat
