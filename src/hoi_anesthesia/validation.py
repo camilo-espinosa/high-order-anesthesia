@@ -165,7 +165,7 @@ def build_synergy_manifest(
         "tie_break": ["most_negative_training_responsive_median", "lexicographic_nplet"],
         "pairwise_reference": "best_of_both_mean_fc_auc_directions",
     }
-    manifest["criterion_3_near_chance_balanced_accuracy"] = 0.55
+    manifest["criterion_3_near_chance_roc_auc"] = 0.55
     return manifest
 
 
@@ -2020,19 +2020,17 @@ def print_synergy_report(
     selections: pd.DataFrame,
     predictions: pd.DataFrame,
     pooled: pd.DataFrame,
-    animal: pd.DataFrame,
-    animal_summary: pd.DataFrame,
     *,
-    near_chance_threshold: float = 0.55,
+    near_chance_roc_auc_threshold: float = 0.55,
 ) -> None:
-    """Print the planned admissibility, held-out synergy, model and verdict summaries."""
-    if not 0.5 <= near_chance_threshold <= 1:
-        raise ValueError("Near-chance balanced-accuracy threshold must be in [0.5, 1].")
+    """Print admissibility, held-out synergy, ROC-/PR-AUC and criterion summaries."""
+    if not 0.5 <= near_chance_roc_auc_threshold <= 1:
+        raise ValueError("Near-chance ROC-AUC threshold must be in [0.5, 1].")
     for dataset in sorted(selections["dataset"].dropna().unique()):
         print(f"\n{dataset}")
         print(
-            "Pooled ROC-AUC is secondary; probabilities were calibrated separately "
-            "inside each held-out-animal fold."
+            "Pooled OOF ROC-AUC and PR-AUC compare scores from fold-specific models; "
+            "interpret them as descriptive when fold score scales differ."
         )
         local_selections = selections.loc[selections["dataset"] == dataset]
         exhaustive = local_selections.loc[
@@ -2087,7 +2085,6 @@ def print_synergy_report(
         print("Held-out synergy check:")
         print(synergy_table.to_string(index=False))
 
-        summary = animal_summary.loc[animal_summary["dataset"] == dataset]
         pooled_local = pooled.loc[pooled["dataset"] == dataset]
         model_names = (
             "omega_direction", "mean_fc_same_regions", "fc_vector_same_regions",
@@ -2097,88 +2094,84 @@ def print_synergy_report(
         for order in sorted(local_selections["order"].unique()):
             row: dict[str, object] = {"order": order}
             for model_name in model_names:
-                model_summary = summary.loc[
-                    (summary["order"] == order) & (summary["model"] == model_name),
-                ]
                 model_pooled = pooled_local.loc[
                     (pooled_local["order"] == order)
                     & (pooled_local["model"] == model_name),
                 ]
-                if model_summary.empty:
+                if model_pooled.empty:
                     row[model_name] = "NA"
                 else:
-                    metric = model_summary.iloc[0]
-                    auc = model_pooled["roc_auc"].iloc[0] if not model_pooled.empty else math.nan
+                    metric = model_pooled.iloc[0]
                     row[model_name] = (
-                        f"BA={metric['balanced_accuracy']:.3f}; "
-                        f"units={metric['units_correct']}/{metric['units']}; "
-                        f"ROC-AUC={auc:.3f}"
+                        f"ROC-AUC={metric['roc_auc']:.3f}; PR-AUC={metric['pr_auc']:.3f}"
                     )
             main_rows.append(row)
-        print("Main table:")
+        print("Pooled out-of-fold ROC-AUC and PR-AUC by order:")
         print(pd.DataFrame(main_rows).to_string(index=False))
 
-        vector = summary.loc[summary["model"] == "fc_vector_same_regions",
-                             ["order", "balanced_accuracy"]].rename(
-            columns={"balanced_accuracy": "fc_vector_ba"},
+        vector = pooled_local.loc[
+            pooled_local["model"] == "fc_vector_same_regions",
+            ["order", "roc_auc", "pr_auc"],
+        ].rename(
+            columns={"roc_auc": "fc_vector_roc_auc", "pr_auc": "fc_vector_pr_auc"},
         )
-        combined = summary.loc[summary["model"] == "fc_vector_plus_omega",
-                               ["order", "balanced_accuracy"]].rename(
-            columns={"balanced_accuracy": "combined_ba"},
+        combined = pooled_local.loc[
+            pooled_local["model"] == "fc_vector_plus_omega",
+            ["order", "roc_auc", "pr_auc"],
+        ].rename(
+            columns={"roc_auc": "combined_roc_auc", "pr_auc": "combined_pr_auc"},
         )
-        pooled_vector = pooled_local.loc[
-            pooled_local["model"] == "fc_vector_same_regions", ["order", "roc_auc"],
-        ].rename(columns={"roc_auc": "fc_vector_auc"})
-        pooled_combined = pooled_local.loc[
-            pooled_local["model"] == "fc_vector_plus_omega", ["order", "roc_auc"],
-        ].rename(columns={"roc_auc": "combined_auc"})
-        gain = vector.merge(combined, on="order", how="outer").merge(
-            pooled_vector, on="order", how="outer",
-        ).merge(pooled_combined, on="order", how="outer")
-        gain["delta_balanced_accuracy"] = gain["combined_ba"] - gain["fc_vector_ba"]
-        gain["delta_roc_auc"] = gain["combined_auc"] - gain["fc_vector_auc"]
-        print("Incremental gain (FC vector + Omega minus FC vector):")
+        gain = vector.merge(combined, on="order", how="outer")
+        gain["delta_roc_auc"] = gain["combined_roc_auc"] - gain["fc_vector_roc_auc"]
+        gain["delta_pr_auc"] = gain["combined_pr_auc"] - gain["fc_vector_pr_auc"]
+        print("Incremental gain (FC vector + Omega minus FC vector; both AUC metrics):")
         print(gain.to_string(index=False))
 
-        print("Post-hoc maxima across orders 3-9:")
-        finite_summary = summary.loc[
-            summary["order"].between(3, 9) & summary["balanced_accuracy"].notna(),
-        ]
-        if finite_summary.empty:
-            print("No post-hoc maximum is available.")
-        else:
-            maxima = finite_summary.groupby("model")["balanced_accuracy"].idxmax()
-            print(summary.loc[
-                maxima, ["order", "model", "balanced_accuracy"],
-            ].to_string(index=False))
+        finite_pooled = pooled_local.loc[pooled_local["order"].between(3, 9)]
+        for metric in ("roc_auc", "pr_auc"):
+            finite_metric = finite_pooled.loc[finite_pooled[metric].notna()]
+            print(f"Post-hoc maximum {metric.upper()} across orders 3-9:")
+            if finite_metric.empty:
+                print("No post-hoc maximum is available.")
+            else:
+                maxima = finite_metric.groupby("model")[metric].idxmax()
+                print(finite_metric.loc[
+                    maxima, ["order", "model", metric],
+                ].to_string(index=False))
 
         for order in sorted(local_selections["order"].unique()):
-            values = summary.loc[summary["order"] == order].set_index("model")
+            values = pooled_local.loc[pooled_local["order"] == order].set_index("model")
             synergy = synergy_table.loc[synergy_table["order"] == order]
-            omega_metric = values.loc["omega_direction"] if "omega_direction" in values.index else None
-            omega_ba = omega_metric["balanced_accuracy"] if omega_metric is not None else math.nan
-            omega_correct = omega_metric["units_correct"] if omega_metric is not None else math.nan
-            omega_units = omega_metric["units"] if omega_metric is not None else math.nan
-            criterion_1 = bool(
-                np.isfinite(omega_ba) and omega_ba > 0.5
-                and omega_correct > omega_units / 2
+            omega_auc = (
+                values.loc["omega_direction", "roc_auc"]
+                if "omega_direction" in values.index else math.nan
             )
+            criterion_1 = bool(np.isfinite(omega_auc) and omega_auc > 0.5)
             criterion_2 = bool(
                 not synergy.empty
                 and synergy.iloc[0]["median_R"] < 0
                 and synergy.iloc[0]["direction_holds"]
             )
-            mean_fc_ba = values.loc["mean_fc_same_regions", "balanced_accuracy"] if "mean_fc_same_regions" in values.index else math.nan
-            vector_ba = values.loc["fc_vector_same_regions", "balanced_accuracy"] if "fc_vector_same_regions" in values.index else math.nan
-            combined_ba = values.loc["fc_vector_plus_omega", "balanced_accuracy"] if "fc_vector_plus_omega" in values.index else math.nan
+            mean_fc_auc = (
+                values.loc["mean_fc_same_regions", "roc_auc"]
+                if "mean_fc_same_regions" in values.index else math.nan
+            )
+            vector_auc = (
+                values.loc["fc_vector_same_regions", "roc_auc"]
+                if "fc_vector_same_regions" in values.index else math.nan
+            )
+            combined_auc = (
+                values.loc["fc_vector_plus_omega", "roc_auc"]
+                if "fc_vector_plus_omega" in values.index else math.nan
+            )
             pairwise_near_chance = (
-                np.isfinite(mean_fc_ba) and np.isfinite(vector_ba)
-                and mean_fc_ba <= near_chance_threshold
-                and vector_ba <= near_chance_threshold
+                np.isfinite(mean_fc_auc) and np.isfinite(vector_auc)
+                and mean_fc_auc <= near_chance_roc_auc_threshold
+                and vector_auc <= near_chance_roc_auc_threshold
             )
             criterion_3 = bool(
                 pairwise_near_chance
-                or (np.isfinite(combined_ba) and np.isfinite(vector_ba) and combined_ba > vector_ba)
+                or (np.isfinite(combined_auc) and np.isfinite(vector_auc) and combined_auc > vector_auc)
             )
             median_r = synergy.iloc[0]["median_R"] if not synergy.empty else math.nan
             median_nr = synergy.iloc[0]["median_NR"] if not synergy.empty else math.nan
@@ -2188,14 +2181,14 @@ def print_synergy_report(
             print(
                 f"Order {order} criteria: "
                 f"1={'PASS' if criterion_1 else 'FAIL'} "
-                f"(Omega BA/units={omega_ba:.3f}/{omega_correct}/{omega_units}); "
+                f"(Omega pooled ROC-AUC={omega_auc:.3f}, threshold > 0.5); "
                 f"2={'PASS' if criterion_2 else 'FAIL'} "
                 f"(median R/NR={median_r:.3f}/{median_nr:.3f}, "
                 f"R<0 fraction={fraction_negative:.3f}); "
                 f"3={'PASS' if criterion_3 else 'FAIL'} "
-                f"(mean-FC/vector BA={mean_fc_ba:.3f}/{vector_ba:.3f}, "
-                f"combined delta={combined_ba - vector_ba:.3f}, "
-                f"near-chance ceiling={near_chance_threshold:.2f})"
+                f"(mean-FC/vector ROC-AUC={mean_fc_auc:.3f}/{vector_auc:.3f}, "
+                f"combined delta ROC-AUC={combined_auc - vector_auc:.3f}, "
+                f"near-chance ceiling={near_chance_roc_auc_threshold:.2f})"
             )
 
 
