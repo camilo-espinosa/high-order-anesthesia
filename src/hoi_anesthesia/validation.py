@@ -29,7 +29,7 @@ from .utils import pairwise_fisher_z
 
 @dataclass(frozen=True)
 class SearchSettings:
-    """LOPO budget, with an explicitly approved AUC-scale temperature."""
+    """LOAO budget; the default temperature is calibrated for AUC only."""
 
     restarts: int = 100
     iterations: int = 10000
@@ -63,6 +63,8 @@ class Selection:
     train_median_R: float = math.nan
     train_median_NR: float = math.nan
     admissible_restarts: int | None = None
+    training_objective: str = "auc"
+    selection_score: float = math.nan
 
 
 @dataclass
@@ -123,26 +125,40 @@ def _sha256_file(path: str | Path) -> str:
     return digest.hexdigest()
 
 
+def _metadata_sha256_variants(path: str | Path) -> tuple[str, ...]:
+    content = Path(path).read_bytes()
+    normalized = content.replace(b"\r\n", b"\n")
+    return tuple(dict.fromkeys(
+        hashlib.sha256(value).hexdigest()
+        for value in (normalized, normalized.replace(b"\n", b"\r\n"), content)
+    ))
+
+
 def build_loao_manifest(
     covariance_path: str | Path,
     metadata_path: str | Path,
     settings: SearchSettings,
     datasets: Sequence[str],
     device: str,
+    objective: str = "auc",
 ) -> dict[str, object]:
     """Fingerprint inputs and search configuration to prevent stale checkpoint reuse."""
-    return {
+    _validate_objective(objective)
+    manifest = {
         "checkpoint_schema": 1,
         "algorithm_version": 1,
         "inputs": {
             "covariance_sha256": _sha256_file(covariance_path),
-            "metadata_sha256": _sha256_file(metadata_path),
+            "metadata_sha256": _metadata_sha256_variants(metadata_path)[0],
         },
         "settings": asdict(settings),
         "datasets": list(datasets),
         "device": str(device),
         "orders": {"exhaustive": [3, 4, 5], "annealing": [6, 7, 8, 9]},
     }
+    if objective != "auc":
+        manifest["selection_objective"] = objective
+    return manifest
 
 
 def build_synergy_manifest(
@@ -210,7 +226,10 @@ def configure_loao_logger(log_path: str | Path) -> logging.Logger:
 class LOAOCheckpointStore:
     """Persist completed fold/order/measure units for safe resume."""
 
-    def __init__(self, directory: str | Path, manifest: Mapping[str, object]):
+    def __init__(
+        self, directory: str | Path, manifest: Mapping[str, object],
+        *, metadata_path: str | Path | None = None,
+    ):
         self.directory = Path(directory)
         self.directory.mkdir(parents=True, exist_ok=True)
         self.manifest = dict(manifest)
@@ -224,6 +243,28 @@ class LOAOCheckpointStore:
                 )
         else:
             _atomic_write_json(manifest_path, self.manifest)
+        self._compatible_directories: list[Path] = []
+        if metadata_path is not None:
+            metadata_hashes = _metadata_sha256_variants(metadata_path)
+            inputs = self.manifest.get("inputs")
+            if not isinstance(inputs, dict) or inputs.get("metadata_sha256") not in metadata_hashes:
+                raise ValueError("Current metadata does not match the checkpoint manifest.")
+            for candidate in sorted(self.directory.parent.glob("*/manifest.json")):
+                if candidate.parent == self.directory:
+                    continue
+                saved = json.loads(candidate.read_text(encoding="utf-8"))
+                if not isinstance(saved, dict):
+                    raise ValueError(f"Invalid checkpoint manifest: {candidate}")
+                saved_inputs = saved.get("inputs")
+                if not isinstance(saved_inputs, dict):
+                    continue
+                if saved_inputs.get("metadata_sha256") not in metadata_hashes:
+                    continue
+                equivalent = dict(saved, inputs=dict(
+                    saved_inputs, metadata_sha256=inputs["metadata_sha256"],
+                ))
+                if equivalent == self.manifest:
+                    self._compatible_directories.append(candidate.parent)
 
     @staticmethod
     def _unit(
@@ -246,9 +287,16 @@ class LOAOCheckpointStore:
         self, strategy: str, dataset: str, animal: str, order: int, measure: str,
     ) -> tuple[list[dict[str, object]], list[dict[str, object]], list[dict[str, object]]] | None:
         unit = self._unit(strategy, dataset, animal, order, measure)
-        path = self._path_for(unit)
+        destination = self._path_for(unit)
+        path = destination
         if not path.exists():
-            return None
+            for directory in self._compatible_directories:
+                candidate = directory / destination.name
+                if candidate.exists():
+                    path = candidate
+                    break
+            else:
+                return None
         payload = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(payload, dict) or payload.get("status") != "complete":
             raise ValueError(f"Incomplete or invalid LOAO checkpoint: {path}")
@@ -260,6 +308,12 @@ class LOAOCheckpointStore:
             if not isinstance(table, list) or any(not isinstance(row, dict) for row in table):
                 raise ValueError(f"Invalid {name} table in LOAO checkpoint: {path}")
             records.append([dict(row) for row in table])
+        if path != destination:
+            _atomic_write_json(destination, payload)
+            logging.getLogger(__name__).warning(
+                "Reused checkpoint from line-ending-equivalent metadata: %s -> %s",
+                path, destination,
+            )
         return records[0], records[1], records[2]
 
     def save(
@@ -406,6 +460,13 @@ def weighted_median_by_candidate(values: torch.Tensor, weights: torch.Tensor) ->
 
 
 MEASURES = ("omega", "omega_norm", "fc")
+OBJECTIVES = ("auc", "anova_d", "logistic")
+
+
+def _validate_objective(objective: str) -> str:
+    if objective not in OBJECTIVES:
+        raise ValueError(f"Objective must be one of {OBJECTIVES}; got {objective!r}.")
+    return objective
 
 
 @torch.no_grad()
@@ -434,11 +495,16 @@ class TrainingObjective:
         self, covariances: np.ndarray, labels: np.ndarray, animals: Sequence[str],
         measure: str, device: str | torch.device, batch_size: int,
         synergy_rule: bool = False,
+        objective: str = "auc",
+        error_context: str = "",
     ):
         if measure not in MEASURES:
             raise ValueError(f"Measure must be one of {MEASURES}.")
         if synergy_rule and measure != "omega":
             raise ValueError("The synergy rule applies only to raw Omega.")
+        self.objective = _validate_objective(objective)
+        if synergy_rule and objective != "auc":
+            raise ValueError("The synergy rule requires the AUC objective.")
         self.covariances = torch.as_tensor(covariances, dtype=torch.float64, device=device)
         self.labels = torch.as_tensor(labels, dtype=torch.long, device=device)
         self.weights = torch.as_tensor(
@@ -447,6 +513,116 @@ class TrainingObjective:
         self.measure = measure
         self.batch_size = batch_size
         self.synergy_rule = synergy_rule
+        self.error_context = error_context
+
+    def _require(
+        self, valid: torch.Tensor, message: str, polarity: int,
+    ) -> None:
+        if not bool(valid.all()):
+            indices = (~valid).nonzero(as_tuple=True)[0][:10].cpu().tolist()
+            raise ValueError(
+                f"{self.error_context} measure={self.measure} "
+                f"objective={self.objective} polarity={polarity:+d}: "
+                f"{message}; candidate batch indices={indices}"
+            )
+
+    @torch.no_grad()
+    def _logistic_scores(self, values: torch.Tensor, polarity: int) -> torch.Tensor:
+        """Batched float64 Newton fits with a nonnegative standardized slope."""
+        weights = self.weights
+        mean = (values * weights).sum(dim=1) / weights.sum()
+        centered = values - mean[:, None]
+        correction = (centered * weights).sum(dim=1)
+        variance = (
+            (centered.square() * weights).sum(dim=1) - correction.square() / weights.sum()
+        ) / weights.sum()
+        self._require(
+            torch.isfinite(variance) & (variance > 0),
+            "Zero or non-finite weighted training variance", polarity,
+        )
+        # Match StandardScaler's numerical-constant handling, without accepting zero variance.
+        eps = torch.finfo(values.dtype).eps
+        upper_bound = weights.sum() * eps * variance + (weights.sum() * mean * eps).square()
+        scale = torch.where(variance <= upper_bound, torch.ones_like(variance), variance.sqrt())
+        feature = polarity * centered / scale[:, None]
+        self._require(torch.isfinite(feature).all(dim=1), "Non-finite standardized feature", polarity)
+        prior = (weights * self.labels).sum() / weights.sum()
+        beta = torch.zeros_like(mean)
+        intercept = torch.full_like(mean, torch.logit(prior).item())
+        boundary_gradient = (weights * (prior - self.labels) * feature).sum(dim=1)
+        # Convexity makes the intercept-only KKT solution exact for this direction.
+        boundary = boundary_gradient >= 0
+        tolerance = 1e-10
+        converged = boundary.clone()
+
+        def loss(slope: torch.Tensor, offset: torch.Tensor) -> torch.Tensor:
+            logits = slope[:, None] * feature + offset[:, None]
+            return 0.5 * slope.square() + (
+                weights * (torch.nn.functional.softplus(logits) - self.labels * logits)
+            ).sum(dim=1)
+
+        for _ in range(100):
+            probability = torch.sigmoid(beta[:, None] * feature + intercept[:, None])
+            residual = weights * (probability - self.labels)
+            gradient_beta = beta + (residual * feature).sum(dim=1)
+            gradient_intercept = residual.sum(dim=1)
+            converged |= (
+                torch.maximum(gradient_beta.abs(), gradient_intercept.abs()) <= tolerance
+            )
+            if bool(converged.all()):
+                break
+            active = ~converged
+            curvature = weights * probability * (1 - probability)
+            h_bb = 1 + (curvature * feature.square()).sum(dim=1)
+            h_bi = (curvature * feature).sum(dim=1)
+            h_ii = curvature.sum(dim=1)
+            determinant = h_bb * h_ii - h_bi.square()
+            self._require(
+                ~active | (torch.isfinite(determinant) & (determinant > 0)),
+                "Singular or non-finite logistic Hessian", polarity,
+            )
+            safe_determinant = torch.where(active, determinant, torch.ones_like(determinant))
+            step_beta = torch.where(
+                active, (h_ii * gradient_beta - h_bi * gradient_intercept) / safe_determinant, 0,
+            )
+            step_intercept = torch.where(
+                active, (h_bb * gradient_intercept - h_bi * gradient_beta) / safe_determinant, 0,
+            )
+            descent = gradient_beta * step_beta + gradient_intercept * step_intercept
+            self._require(
+                ~active | (torch.isfinite(descent) & (descent > 0)),
+                "Invalid logistic Newton direction", polarity,
+            )
+            current_loss = loss(beta, intercept)
+            rate = torch.ones_like(beta)
+            accepted = ~active
+            for _ in range(50):
+                proposed_beta = beta - rate * step_beta
+                proposed_intercept = intercept - rate * step_intercept
+                proposed_loss = loss(proposed_beta, proposed_intercept)
+                accepted |= (
+                    (proposed_beta >= 0) & torch.isfinite(proposed_loss)
+                    & (proposed_loss <= current_loss - 1e-4 * rate * descent
+                       + 8 * torch.finfo(values.dtype).eps * (1 + current_loss.abs()))
+                )
+                if bool(accepted.all()):
+                    break
+                rate = torch.where(accepted, rate, rate * 0.5)
+            self._require(accepted, "Logistic Newton line search failed", polarity)
+            beta = torch.where(active, proposed_beta, beta)
+            intercept = torch.where(active, proposed_intercept, intercept)
+
+        probability = torch.sigmoid(beta[:, None] * feature + intercept[:, None])
+        residual = weights * (probability - self.labels)
+        final_gradient = torch.maximum(
+            (beta + (residual * feature).sum(dim=1)).abs(), residual.sum(dim=1).abs(),
+        )
+        self._require(
+            boundary | (torch.isfinite(final_gradient) & (final_gradient <= tolerance)),
+            "Logistic fit did not converge within 100 Newton iterations (tolerance=1e-10)",
+            polarity,
+        )
+        return -loss(beta, intercept)
 
     @torch.no_grad()
     def values(self, candidates: torch.Tensor) -> torch.Tensor:
@@ -456,7 +632,7 @@ class TrainingObjective:
     def score_with_admissibility(
         self, candidates: torch.Tensor, polarity: int = 1,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Return weighted AUC and the training-awake synergy admissibility mask."""
+        """Return the configured score and the training-awake synergy admissibility mask."""
         return self.score_values(self.values(candidates), polarity)
 
     @torch.no_grad()
@@ -468,7 +644,29 @@ class TrainingObjective:
             raise ValueError("Polarity must be +1 or -1.")
         if values.ndim != 2 or values.shape[1] != len(self.labels):
             raise ValueError("Candidate values must have shape (candidates, training scans).")
-        auc = weighted_roc_auc(polarity * values, self.labels, self.weights)
+        if self.objective == "auc":
+            auc = weighted_roc_auc(polarity * values, self.labels, self.weights)
+        else:
+            self._require(torch.isfinite(values).all(dim=1), "Non-finite training scalar", polarity)
+            if self.objective == "anova_d":
+                moments = []
+                for label in (0, 1):
+                    mask = self.labels == label
+                    weights = self.weights[mask] / self.weights[mask].sum()
+                    class_values = values[:, mask]
+                    mean = (class_values * weights).sum(dim=1)
+                    variance = ((class_values - mean[:, None]).square() * weights).sum(dim=1)
+                    moments.append((mean, variance))
+                (mean_nr, variance_nr), (mean_r, variance_r) = moments
+                denominator = ((variance_r + variance_nr) / 2).sqrt()
+                self._require(
+                    torch.isfinite(denominator) & (denominator > 0),
+                    "Zero or non-finite pooled within-class standard deviation", polarity,
+                )
+                auc = polarity * (mean_r - mean_nr) / denominator
+            else:
+                auc = self._logistic_scores(values.to(torch.float64), polarity)
+            self._require(torch.isfinite(auc), "Non-finite selection score", polarity)
         if not self.synergy_rule:
             return auc, torch.ones_like(auc, dtype=torch.bool)
         responsive = self.labels == 1
@@ -478,7 +676,26 @@ class TrainingObjective:
     def __call__(self, candidates: torch.Tensor, polarity: int = 1) -> torch.Tensor:
         if polarity not in (-1, 1):
             raise ValueError("Polarity must be +1 or -1.")
-        return weighted_roc_auc(polarity * self.values(candidates), self.labels, self.weights)
+        if self.objective == "auc":
+            return weighted_roc_auc(polarity * self.values(candidates), self.labels, self.weights)
+        return self.score_values(self.values(candidates), polarity)[0]
+
+    @torch.no_grad()
+    def polarity_scores(self, candidates: torch.Tensor) -> dict[int, torch.Tensor]:
+        values = self.values(candidates)
+        if self.objective == "auc":
+            auc = weighted_roc_auc(values, self.labels, self.weights)
+            return {1: auc, -1: 1 - auc}
+        return {polarity: self.score_values(values, polarity)[0] for polarity in (1, -1)}
+
+    @torch.no_grad()
+    def training_auc(self, nplet: tuple[int, ...], polarity: int) -> float:
+        candidates = torch.tensor([nplet], dtype=torch.long, device=self.covariances.device)
+        values = self.values(candidates)
+        self._require(torch.isfinite(values).all(dim=1), "Non-finite training scalar", polarity)
+        return float(weighted_roc_auc(
+            polarity * values, self.labels, self.weights,
+        )[0].item())
 
     @torch.no_grad()
     def synergy_annealing_score(self, candidates: torch.Tensor) -> torch.Tensor:
@@ -519,46 +736,58 @@ def candidate_batches(n_regions: int, order: int, batch_size: int) -> Iterator[l
 def _update_best(
     best: dict[int, Selection],
     candidates: torch.Tensor,
-    auc: torch.Tensor,
+    polarity_scores: Mapping[int, torch.Tensor],
     method: str,
     seed: int,
+    training: TrainingObjective,
 ) -> None:
-    for polarity, scores in ((1, auc), (-1, 1 - auc)):
+    for polarity, scores in polarity_scores.items():
         index = int(scores.argmax().item())
         nplet = tuple(candidates[index].tolist())
         score = float(scores[index].item())
         previous = best.get(polarity)
-        if previous is None or score > previous.training_auc:
-            best[polarity] = Selection(nplet, score, method, seed)
+        if previous is None or score > previous.selection_score:
+            auc = score if training.objective == "auc" else training.training_auc(nplet, polarity)
+            best[polarity] = Selection(
+                nplet, auc, method, seed,
+                training_objective=training.objective, selection_score=score,
+            )
 
 
 def exhaustive_search(
-    objective: TrainingObjective, order: int, batch_size: int = 2048,
-    seed: int = 2026,
+    training: TrainingObjective, order: int, batch_size: int = 2048,
+    seed: int = 2026, objective: str = "auc",
 ) -> dict[int, Selection]:
     """Evaluate every n-plet at orders 3-5, in GPU-sized candidate batches."""
-    device = objective.covariances.device
-    n_regions = objective.covariances.shape[-1]
+    if _validate_objective(objective) != training.objective:
+        raise ValueError("Search objective must match TrainingObjective.objective.")
+    device = training.covariances.device
+    n_regions = training.covariances.shape[-1]
     best: dict[int, Selection] = {}
     with tqdm(
         total=math.comb(n_regions, order),
-        desc=f"Exhaustive n={order} | {objective.measure}",
+        desc=f"Exhaustive n={order} | {training.measure}",
         unit="candidate",
         unit_scale=True,
     ) as progress:
         for batch in candidate_batches(n_regions, order, batch_size):
             candidates = torch.tensor(batch, dtype=torch.long, device=device)
-            _update_best(best, candidates, objective(candidates), "exhaustive", seed)
+            _update_best(
+                best, candidates, training.polarity_scores(candidates),
+                "exhaustive", seed, training,
+            )
             progress.update(len(batch))
     return best
 
 
 def simulated_annealing_search(
-    objective: TrainingObjective, order: int, settings: SearchSettings,
-    seed: int,
+    training: TrainingObjective, order: int, settings: SearchSettings,
+    seed: int, objective: str = "auc",
 ) -> dict[int, Selection]:
     """Search orders 6-9 with the shared THOI-derived annealer."""
-    device = objective.covariances.device
+    if _validate_objective(objective) != training.objective:
+        raise ValueError("Search objective must match TrainingObjective.objective.")
+    device = training.covariances.device
     cuda_devices = (
         [device.index if device.index is not None else torch.cuda.current_device()]
         if device.type == "cuda" else []
@@ -572,23 +801,26 @@ def simulated_annealing_search(
                 with torch.cuda.device(device):
                     torch.cuda.manual_seed(direction_seed)
             solutions, scores = simulated_annealing_parallel(
-                objective.covariances, order=order, covmat_precomputed=True,
+                training.covariances, order=order, covmat_precomputed=True,
                 repeat=settings.restarts, batch_size=settings.batch_size, device=device,
                 max_iterations=settings.iterations, early_stop=settings.early_stop,
                 initial_temp=settings.temperature, cooling_rate=settings.cooling,
                 largest=True, verbose=logging.WARNING,
-                candidate_score=lambda candidates: objective(candidates, polarity),
+                candidate_score=lambda candidates: training(candidates, polarity),
                 progress_label=(
-                    f"Annealing n={order} | {objective.measure} | polarity={polarity:+d}"
+                    f"Annealing n={order} | {training.measure} | polarity={polarity:+d}"
                 ),
             )
         candidates = solutions[:, 0].sort(dim=-1).values
         score = scores[:, 0]
         maximum = score.max()
         tied = candidates[score == maximum].cpu().tolist()
+        nplet = min(tuple(row) for row in tied)
+        score = float(maximum.item())
+        auc = score if objective == "auc" else training.training_auc(nplet, polarity)
         best[polarity] = Selection(
-            min(tuple(row) for row in tied), float(maximum.item()),
-            "annealing", direction_seed,
+            nplet, auc, "annealing", direction_seed,
+            training_objective=objective, selection_score=score,
         )
     return best
 
@@ -948,6 +1180,9 @@ def _assemble_loao_result(
     predictions: list[dict],
     selections: list[dict],
     fits: list[dict],
+    *,
+    expected_orders: Sequence[int] = (),
+    expected_measures: Sequence[str] = (),
 ) -> LOAOResult:
     prediction_frame, selection_frame = pd.DataFrame(predictions), pd.DataFrame(selections)
     if not prediction_frame.empty:
@@ -963,6 +1198,19 @@ def _assemble_loao_result(
             & fit_frame["model"].eq("pairwise_vector")
         )
         fit_frame = fit_frame.loc[~legacy_omega_vector].reset_index(drop=True)
+    if expected_orders:
+        expected_groups = [
+            (str(metadata["dataset"].iloc[0]), order, measure, polarity, model)
+            for order in expected_orders
+            for measure in expected_measures
+            for polarity in (1, -1)
+            for model in (("scalar", "pairwise_vector") if measure == "fc" else ("scalar",))
+        ]
+        validate_prediction_coverage(
+            prediction_frame, metadata,
+            ["dataset", "order", "selection_measure", "polarity", "model"],
+            expected_groups,
+        )
     stability, frequency = selection_stability(selection_frame, covariances.shape[-1])
     sessions = metadata.groupby(["dataset", "animal", "state"], as_index=False).agg(
         n_sessions=("session", "nunique"), n_scans=("scan_index", "size"),
@@ -988,6 +1236,79 @@ def _validate_measures(measures: Sequence[str]) -> tuple[str, ...]:
     return measures
 
 
+def validate_prediction_coverage(
+    predictions: pd.DataFrame,
+    metadata: pd.DataFrame,
+    group_columns: Sequence[str],
+    expected_groups: Sequence[tuple],
+) -> None:
+    """Require every expected scan exactly once, including entirely missing groups."""
+    identity = ["state", "scan_index"]
+    required = set(group_columns) | set(identity) | {
+        "animal", "session", "run", "responsive", "held_out_animal",
+    }
+    if not required.issubset(predictions.columns):
+        raise ValueError(f"Prediction coverage requires columns {sorted(required)}.")
+    if predictions[list(required)].isna().any().any():
+        bad = predictions.loc[predictions[list(required)].isna().any(axis=1)]
+        raise ValueError(f"Missing prediction identities: {bad[list(required)].head().to_dict('records')}")
+    expected_keys = set(expected_groups)
+    observed_keys = set(predictions.groupby(list(group_columns), sort=False).groups)
+    if observed_keys != expected_keys:
+        raise ValueError(
+            f"Prediction group mismatch for {list(group_columns)}: "
+            f"missing={sorted(expected_keys - observed_keys)}, "
+            f"unexpected={sorted(observed_keys - expected_keys)}"
+        )
+    for key, group in predictions.groupby(list(group_columns), sort=False):
+        dataset = key[list(group_columns).index("dataset")]
+        expected = metadata.loc[metadata["dataset"].eq(dataset)].set_index(identity)
+        actual = group.set_index(identity)
+        if expected.empty or expected.index.has_duplicates:
+            raise ValueError(f"Invalid expected scan identities for {key}.")
+        if (actual.index.has_duplicates or len(actual) != len(expected)
+                or set(actual.index) != set(expected.index)):
+            raise ValueError(
+                f"Incomplete or duplicate held-out scan coverage for {key}; "
+                f"missing={list(expected.index.difference(actual.index))[:10]}, "
+                f"unexpected={list(actual.index.difference(expected.index))[:10]}"
+            )
+        actual = actual.reindex(expected.index)
+        for column in ("animal", "session", "run", "responsive"):
+            if not np.array_equal(actual[column].to_numpy(), expected[column].to_numpy()):
+                raise ValueError(f"Held-out {column} mismatch for {key}.")
+        if not actual["held_out_animal"].eq(actual["animal"]).all():
+            raise ValueError(f"Held-out fold/animal mismatch for {key}.")
+        for column in ("probability", "raw_value"):
+            if column in actual:
+                values = actual[column].to_numpy(dtype=float)
+                valid = np.isfinite(values)
+                if column == "probability":
+                    valid &= (values >= 0) & (values <= 1)
+                if not valid.all():
+                    bad = actual.loc[~valid, ["held_out_animal", column]]
+                    raise ValueError(f"Invalid {column} for {key}: {bad.to_dict('index')}")
+        if "raw_omega" in actual and "selection_measure" in group_columns:
+            measure = key[list(group_columns).index("selection_measure")]
+            if measure == "omega" and not np.isfinite(actual["raw_omega"].to_numpy(dtype=float)).all():
+                raise ValueError(
+                    f"Missing or non-finite raw Omega for {key}; "
+                    f"held_out_animals={actual['held_out_animal'].unique().tolist()}"
+                )
+
+
+def _validate_search_checkpoint(
+    checkpoint: LOAOCheckpointStore | None, objective: str,
+) -> None:
+    _validate_objective(objective)
+    if checkpoint is not None:
+        checkpoint_objective = checkpoint.manifest.get("selection_objective", "auc")
+        if checkpoint_objective != objective:
+            raise ValueError(
+                f"Checkpoint objective {checkpoint_objective!r} does not match {objective!r}."
+            )
+
+
 def run_loao_exhaustive(
     covariances: np.ndarray,
     metadata: pd.DataFrame,
@@ -997,9 +1318,12 @@ def run_loao_exhaustive(
     checkpoint: LOAOCheckpointStore | None = None,
     logger: logging.Logger | None = None,
     measures: Sequence[str] = ("omega", "fc"),
+    objective: str = "auc",
 ) -> LOAOResult:
     """Run LOAO with exhaustive n-plet search for orders 3, 4 and 5."""
     measures = _validate_measures(measures)
+    _validate_search_checkpoint(checkpoint, objective)
+    selection_objective = objective
     metadata = metadata.reset_index(drop=True)
     dataset = str(metadata["dataset"].iloc[0])
     predictions, selections, fits = [], [], []
@@ -1035,30 +1359,40 @@ def run_loao_exhaustive(
                             continue
 
                     task_predictions, task_selections, task_fits = [], [], []
-                    objective = None
+                    training = None
                     try:
-                        objective = TrainingObjective(
+                        training = TrainingObjective(
                             covariances[train], labels, train_rows["animal"],
                             measure, device, settings.batch_size,
+                            objective=selection_objective, error_context=active_context,
                         )
-                        chosen = exhaustive_search(objective, order, settings.batch_size, seed)
+                        chosen = exhaustive_search(
+                            training, order, settings.batch_size, seed,
+                            objective=selection_objective,
+                        )
                         for polarity, selection in chosen.items():
+                            active_context = (
+                                f"dataset={dataset} held_out_animal={animal} "
+                                f"n={order} measure={measure} polarity={polarity:+d}"
+                            )
                             base = dict(
                                 dataset=dataset, order=order, held_out_animal=animal,
                                 selection_measure=measure, polarity=polarity,
                             )
                             task_selections.append(dict(
                                 base, nplet=selection.nplet, training_auc=selection.training_auc,
+                                training_objective=selection.training_objective,
+                                selection_score=selection.selection_score,
                                 method=selection.method, seed=selection.seed, n_training_scans=len(train),
                                 n_training_animals=train_rows["animal"].nunique(),
                             ))
                             fold_predictions, fold_fits = _evaluate_selection(
-                                objective, held_covariances, metadata, test, labels, weights, base, selection,
+                                training, held_covariances, metadata, test, labels, weights, base, selection,
                             )
                             task_predictions.extend(fold_predictions)
                             task_fits.extend(fold_fits)
                     finally:
-                        del objective
+                        del training
                     if checkpoint:
                         checkpoint_path = checkpoint.save(
                             "exhaustive", dataset, animal, order, measure,
@@ -1074,14 +1408,20 @@ def run_loao_exhaustive(
                     logger.info(message)
                 else:
                     print(message, flush=True)
-        except Exception:
+        except Exception as error:
             if logger:
                 logger.exception("LOAO search failed during %s", active_context)
+            if selection_objective != "auc":
+                raise RuntimeError(f"LOAO search failed during {active_context}: {error}") from error
             raise
         finally:
             del held_covariances
             _clear_cuda_cache(device)
-    return _assemble_loao_result(covariances, metadata, predictions, selections, fits)
+    return _assemble_loao_result(
+        covariances, metadata, predictions, selections, fits,
+        expected_orders=(3, 4, 5) if selection_objective != "auc" else (),
+        expected_measures=measures,
+    )
 
 
 def run_loao_annealing(
@@ -1093,9 +1433,12 @@ def run_loao_annealing(
     checkpoint: LOAOCheckpointStore | None = None,
     logger: logging.Logger | None = None,
     measures: Sequence[str] = ("omega", "fc"),
+    objective: str = "auc",
 ) -> LOAOResult:
     """Run LOAO with simulated annealing for n-plet orders 6, 7, 8 and 9."""
     measures = _validate_measures(measures)
+    _validate_search_checkpoint(checkpoint, objective)
+    selection_objective = objective
     metadata = metadata.reset_index(drop=True)
     dataset = str(metadata["dataset"].iloc[0])
     predictions, selections, fits = [], [], []
@@ -1131,30 +1474,39 @@ def run_loao_annealing(
                             continue
 
                     task_predictions, task_selections, task_fits = [], [], []
-                    objective = None
+                    training = None
                     try:
-                        objective = TrainingObjective(
+                        training = TrainingObjective(
                             covariances[train], labels, train_rows["animal"],
                             measure, device, settings.batch_size,
+                            objective=selection_objective, error_context=active_context,
                         )
-                        chosen = simulated_annealing_search(objective, order, settings, seed)
+                        chosen = simulated_annealing_search(
+                            training, order, settings, seed, objective=selection_objective,
+                        )
                         for polarity, selection in chosen.items():
+                            active_context = (
+                                f"dataset={dataset} held_out_animal={animal} "
+                                f"n={order} measure={measure} polarity={polarity:+d}"
+                            )
                             base = dict(
                                 dataset=dataset, order=order, held_out_animal=animal,
                                 selection_measure=measure, polarity=polarity,
                             )
                             task_selections.append(dict(
                                 base, nplet=selection.nplet, training_auc=selection.training_auc,
+                                training_objective=selection.training_objective,
+                                selection_score=selection.selection_score,
                                 method=selection.method, seed=selection.seed, n_training_scans=len(train),
                                 n_training_animals=train_rows["animal"].nunique(),
                             ))
                             fold_predictions, fold_fits = _evaluate_selection(
-                                objective, held_covariances, metadata, test, labels, weights, base, selection,
+                                training, held_covariances, metadata, test, labels, weights, base, selection,
                             )
                             task_predictions.extend(fold_predictions)
                             task_fits.extend(fold_fits)
                     finally:
-                        del objective
+                        del training
                     if checkpoint:
                         checkpoint_path = checkpoint.save(
                             "annealing", dataset, animal, order, measure,
@@ -1170,14 +1522,20 @@ def run_loao_annealing(
                     logger.info(message)
                 else:
                     print(message, flush=True)
-        except Exception:
+        except Exception as error:
             if logger:
                 logger.exception("LOAO search failed during %s", active_context)
+            if selection_objective != "auc":
+                raise RuntimeError(f"LOAO search failed during {active_context}: {error}") from error
             raise
         finally:
             del held_covariances
             _clear_cuda_cache(device)
-    return _assemble_loao_result(covariances, metadata, predictions, selections, fits)
+    return _assemble_loao_result(
+        covariances, metadata, predictions, selections, fits,
+        expected_orders=(6, 7, 8, 9) if selection_objective != "auc" else (),
+        expected_measures=measures,
+    )
 
 
 def _exhaustive_search_across_folds(
